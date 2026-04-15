@@ -10,6 +10,7 @@
 #include <samurai/mr/adapt.hpp>
 #include <samurai/mr/mesh.hpp>
 #include <samurai/samurai.hpp>
+#include <samurai/timers.hpp>
 
 #include "euler/config.hpp"
 #include "euler/init/cases.hpp"
@@ -30,6 +31,7 @@ void init_bc(Field& u, double& t, const std::string& test_case_name)
 template <class Field>
 void init_sol(Field& u, auto& config, int jump, auto& mra_config, const std::string& test_case_name)
 {
+    samurai::ScopedTimer timer("initialization");
     static constexpr std::size_t dim = Field::dim;
     using mesh_t                     = typename Field::mesh_t;
     using cl_type                    = typename mesh_t::cl_type;
@@ -184,6 +186,7 @@ int main(int argc, char* argv[])
     std::cout << "Using scheme: " << scheme << std::endl;
     auto fv_scheme = get_fv_scheme<decltype(u)>(scheme);
 
+    samurai::times::timers.start("TimeLoop");
     while (t != Tf)
     {
         MRadaptation(mra_config);
@@ -220,6 +223,7 @@ int main(int argc, char* argv[])
             save("results", fmt::format("{}_{}{}", filename, scheme, suffix), u);
         }
     }
+    samurai::times::timers.stop("TimeLoop");
 
     samurai::finalize();
     return 0;
