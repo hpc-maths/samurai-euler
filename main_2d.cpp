@@ -3,6 +3,7 @@
 
 #include <numbers>
 
+#include <cassert>
 #include <samurai/algorithm/update.hpp>
 #include <samurai/field.hpp>
 #include <samurai/io/hdf5.hpp>
