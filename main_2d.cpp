@@ -188,8 +188,11 @@ int main(int argc, char* argv[])
     auto fv_scheme = get_fv_scheme<decltype(u)>(scheme);
 
     samurai::times::timers.start("TimeLoop");
-    while (t != Tf)
+    bool done = false;
+    while (!done)
     {
+        double dt = cfl * dx / get_max_lambda(u);
+
         MRadaptation(mra_config);
 
         if (check_positivity)
@@ -197,19 +200,16 @@ int main(int argc, char* argv[])
             check(u);
         }
 
-        double dt = cfl * dx / get_max_lambda(u);
-        t += dt;
-
         if (std::isnan(t))
         {
             std::cerr << "Error: Time became NaN, stopping simulation" << std::endl;
             break;
         }
 
-        if (t > Tf)
+        if (t + dt > Tf)
         {
-            dt += Tf - t;
-            t = Tf;
+            dt = Tf - t;
+            done = true;
         }
         std::cout << fmt::format("iteration {}: t = {}, dt = {}", nt++, t, dt) << std::endl;
 
@@ -217,6 +217,8 @@ int main(int argc, char* argv[])
         unp1 = u - dt * fv_scheme(u);
 
         samurai::swap(u, unp1);
+
+        t += dt;
 
         if (t >= static_cast<double>(nsave + 1) * dt_save || t == Tf)
         {
