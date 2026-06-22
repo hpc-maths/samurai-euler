@@ -13,7 +13,7 @@
 namespace test_case::double_mach_reflection
 {
     double alpha = std::numbers::pi / 3.;
-    double x0    = 2. / 3;
+    double x0    = 1. / 6;
 
     PrimState<2> left_state{
         8.,

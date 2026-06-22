@@ -1,6 +1,7 @@
 // Copyright 2025 the samurai team
 // SPDX-License-Identifier:  BSD-3-Clause
 
+#include <cassert>
 #include <samurai/algorithm/update.hpp>
 #include <samurai/field.hpp>
 #include <samurai/io/hdf5.hpp>
