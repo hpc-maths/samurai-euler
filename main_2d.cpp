@@ -98,7 +98,7 @@ int main(int argc, char* argv[])
     auto& app = samurai::initialize("Double mach reflection", argc, argv);
 
     double Tf  = .25;
-    double cfl = 0.9;
+    double cfl = 0.4;
     double t   = 0.;
     std::string restart_file;
     std::string scheme    = "hllc";
