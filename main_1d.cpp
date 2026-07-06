@@ -95,6 +95,8 @@ int main(int argc, char* argv[])
 
     SAMURAI_PARSE(argc, argv);
 
+    std::cout <<  "Samurai version: " << SAMURAI_VERSION << std::endl;   // Print Samurai version info
+    
     // Initialize the mesh
     const samurai::Box<double, dim> box(min_corner, max_corner);
     auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(2).disable_minimal_ghost_width();

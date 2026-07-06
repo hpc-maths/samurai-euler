@@ -130,6 +130,7 @@ int main(int argc, char* argv[])
     app.add_option("--nfiles", nfiles, "Number of output files")->capture_default_str()->group("Output");
 
     SAMURAI_PARSE(argc, argv);
+    std::cout <<  "Samurai version: " << SAMURAI_VERSION << std::endl;   // Print Samurai version info
 
     std::string filename = test_case;
 
