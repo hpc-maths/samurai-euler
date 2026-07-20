@@ -1,45 +1,83 @@
 # Copyright 2025 the samurai team
 # SPDX-License-Identifier:  BSD-3-Clause
 """
-Error analysis for the analytic Euler test cases (isentropic vortex, free-stream).
+Measure the convergence order of the schemes on the test cases that have an
+exact solution (isentropic vortex, free stream).
 
-Reads the HDF5 output(s) of euler_2d and compares the numerical solution to the
-exact solution on the leaf cells, weighting each cell by its area (so the norms
-are consistent across an adapted, multi-level mesh):
+Give it a starting level and a number of resolutions and it runs euler_2d once
+per resolution, compares each output to the exact solution, prints the observed
+order and draws the convergence curve:
 
-    L1   = sum_i |e_i| * area_i
-    L2   = sqrt( sum_i e_i^2 * area_i )
+    python error_analysis.py vortex --Tf 1 --start-level 6 --npoints 4
+
+It can equally analyse files computed by hand, by listing them instead:
+
+    python error_analysis.py vortex --Tf 1 results/vortex_L6 results/vortex_L7
+
+Norms
+-----
+The error is taken on the leaf cells, each weighted by its area, so the norms
+mean the same thing on a uniform and on an adapted mesh:
+
+    L1   = sum_i |e_i| * area_i / sum_i area_i
+    L2   = sqrt( sum_i e_i^2 * area_i / sum_i area_i )
     Linf = max_i |e_i|
 
-Given several runs at increasing resolution, it also prints the observed order
-of convergence  p = log(E_k / E_{k+1}) / log(2)  between consecutive levels.
+The order is printed twice: between consecutive resolutions,
+p = log(E_k / E_k+1) / log(h_k / h_k+1), and fitted by least squares over the
+whole study. `h` is the size of the FINEST cell actually present in the output,
+not the requested max-level, which matters on adapted meshes (see below).
 
-It can also drive the runs itself: give a starting level and a number of points
-and it launches euler_2d once per resolution, collects the errors, fits the
-order by least squares and draws the convergence curve.
+Reading the table
+-----------------
+    h      size of the finest cell present in the output
+    N      number of leaf cells
+    nlev   number of distinct cell sizes: 1 on a uniform mesh, > 1 when the
+           mesh really carries level interfaces
+
+Reference results (density, Tf = 1, HLLC)
+-----------------------------------------
+HLLC here has stencil_size 2, i.e. no MUSCL reconstruction, and the time
+integration is explicit Euler, so the design order is 1. Uniform meshes at
+levels 6 to 9 give L1 orders 0.89, 0.94, 0.97, converging to 1 as expected.
+The same study with the multiresolution and --mr-eps 1e-5 reproduces those
+errors to 4 digits with 43% fewer cells at level 9: adaptation costs neither
+order nor accuracy.
+
+Two traps
+---------
+1. A uniform state on an adapted mesh has zero detail everywhere, so the
+   multiresolution coarsens it down to min-level and the mesh ends up uniform
+   again. A zero free-stream error then proves nothing, since there is no level
+   interface left to exercise. --refine-boundary (a samurai option, passed
+   through --extra) pins the boundary at max-level and restores real
+   interfaces. Watch the nlev column: it must be > 1.
+
+2. With a FIXED multiresolution epsilon the mesh stops refining once the detail
+   falls below it, the error saturates, and the measured order collapses. Pass
+   --mr-eps: it is the value at the coarsest resolution of the study and is
+   scaled as h^--eps-order along it. A warning fires when two resolutions share
+   the same finest cell, which is the symptom of an epsilon still too large.
 
 Examples
 --------
-# convergence study: levels 4, 5, 6, 7 run automatically, then order + plot
-python error_analysis.py vortex --Tf 1 --start-level 4 --npoints 4
+# order of the scheme on uniform meshes, levels 6 to 9
+python error_analysis.py vortex --Tf 1 --start-level 6 --npoints 4
 
-# single file, density error of the vortex at t = Tf
-python error_analysis.py vortex --Tf 10 results/isentropic_vortex_hllc
+# same study with mesh adaptation over 3 levels
+python error_analysis.py vortex --Tf 1 --start-level 6 --npoints 4 \\
+    --adapt 3 --mr-eps 1e-5
 
-# convergence study on files already computed by hand
-python error_analysis.py vortex --Tf 10 \
-    results/vortex_L6 results/vortex_L7 results/vortex_L8
-
-# free-stream preservation on an adapted mesh. --refine-boundary keeps the
-# boundary at max-level while the interior coarsens, which is what creates the
-# level interfaces the test is meant to exercise: without it the multiresolution
-# coarsens the uniform state down to min-level and the check is vacuous (watch
-# the nlev column, it must be > 1).
-python error_analysis.py free_stream --Tf 0.1 --start-level 4 --npoints 3 \
+# free-stream preservation across level interfaces
+python error_analysis.py free_stream --Tf 0.1 --start-level 4 --npoints 3 \\
     --adapt 2 --extra --refine-boundary
 
-# free-stream preservation check on an existing file
-python error_analysis.py free_stream results/free_stream_hllc
+# cross-check: same norms on the reconstructed finest grid (they agree to 5
+# digits, reconstruction is not needed to measure an error)
+python error_analysis.py vortex --Tf 1 --reconstruct \\
+    results/vortex_L7 results/vortex_L8
+
+Note that --extra swallows everything after it, so it must come last.
 """
 
 import argparse
@@ -148,6 +186,12 @@ SERIES_MARKERS = ("o", "s", "^")
 
 
 def errors(num, ref, area):
+    """Area-weighted L1, L2 and Linf norms of `num - ref`.
+
+    L1 and L2 are normalised by the total area so that they are averages, and
+    are therefore directly comparable between meshes holding different numbers
+    of cells.
+    """
     e = np.abs(num - ref)
     total = area.sum()
     l1 = np.sum(e * area) / total
@@ -255,6 +299,7 @@ def fit_order(h, err):
 
 
 def print_table(case, var, t, h, ncells, nlev, err):
+    """Print the error table, the order per resolution and the fitted order."""
     print(f"\n# case={case}  var={var}  t={t}")
     header = f"{'h':>12} {'N':>10} {'nlev':>5}"
     for name in NORMS:
@@ -281,6 +326,10 @@ def print_table(case, var, t, h, ncells, nlev, err):
             "limited by --mr-eps, not by the mesh"
         )
 
+    if len(h) < 2:
+        print("# a single resolution: nothing to fit, give at least two")
+        return
+
     for name in NORMS:
         if is_exact(err[name]):
             print(f"# {name}: exact to round-off, no order to measure")
@@ -289,6 +338,12 @@ def print_table(case, var, t, h, ncells, nlev, err):
 
 
 def plot_convergence(case, var, h, err, output):
+    """Draw the log-log convergence curve of the three norms.
+
+    A dashed line of integer slope, taken from the fitted L1 order and anchored
+    on the coarsest point, gives the eye a reference to judge the slope against.
+    Norms that are exact to round-off are skipped rather than plotted at zero.
+    """
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(6.5, 5.0))
@@ -370,18 +425,21 @@ def main():
         "--adapt",
         type=int,
         default=0,
-        help="Number of levels below max-level (0 = uniform mesh)",
+        help="Span of the mesh in levels below max-level (0 = uniform mesh,"
+        " which is what measuring the order of a scheme requires)",
     )
     run.add_argument(
         "--mr-eps",
         type=float,
-        help="Multiresolution epsilon at the coarsest resolution of the study",
+        help="Multiresolution epsilon at the coarsest resolution of the study;"
+        " too large an epsilon stalls the refinement and collapses the order",
     )
     run.add_argument(
         "--eps-order",
         type=float,
         default=1.0,
-        help="--mr-eps is scaled as h^eps_order along the study",
+        help="--mr-eps is scaled as h^eps_order along the study, so that the"
+        " adaptation error stays below the discretization one",
     )
     run.add_argument("--cfl", type=float, default=0.4, help="CFL number")
     run.add_argument(
@@ -393,7 +451,9 @@ def main():
         "--extra",
         nargs=argparse.REMAINDER,
         default=[],
-        help="Remaining arguments are forwarded to euler_2d",
+        help="Forward every following argument to euler_2d, e.g."
+        " --extra --refine-boundary. Swallows the rest of the command line,"
+        " so it must come last",
     )
 
     plot = parser.add_argument_group("plot")

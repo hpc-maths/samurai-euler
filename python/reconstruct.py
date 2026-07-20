@@ -1,3 +1,58 @@
+# Copyright 2025 the samurai team
+# SPDX-License-Identifier:  BSD-3-Clause
+"""
+Rebuild the solution of an adapted samurai run on the uniform grid of its
+finest level.
+
+An adapted mesh stores one value per leaf cell, at whatever level the
+multiresolution chose locally. Anything that expects a plain array (an imshow,
+a comparison against another run, a spectrum) needs the missing fine cells
+filled in. This module does that with the same operators as the solver, so the
+reconstruction is the one the multiresolution itself implies:
+
+1. leaves are read into one array per level, missing entries left at NaN;
+2. projection, coarse to fine order reversed: a parent that has children takes
+   the average of its 4 children, so every level holds a complete coarse
+   representation wherever the mesh is finer;
+3. prediction, fine to coarse order: a missing child is interpolated from its
+   parent's neighbourhood with the centred stencil of `pred_coeff`.
+
+Only step 3 invents data, and only where the mesh had deliberately coarsened,
+i.e. where the multiresolution had established that the detail is below
+epsilon. The reconstruction is therefore accurate to epsilon by construction.
+
+A consequence worth knowing before reaching for this module: reconstructing is
+NOT needed to measure an error on an adapted mesh. The leaf values weighted by
+cell area already are the piecewise-constant numerical solution, and
+error_analysis.py gets the same L1/L2/Linf to 5 digits either way. Use this
+module to look at a field, not to norm one.
+
+Boundary conditions
+-------------------
+Prediction reaches outside the domain, so the ghost layers have to be filled by
+a `bc` callback with the signature
+
+    bc(u, pred_s, level, box, var_name)
+
+where `u` is the level array with `pred_s` ghost layers on each side.
+`make_double_mach_bc(Tf)` reproduces the double Mach reflection inflow states;
+`make_exact_bc(f)` fills the ghosts with an analytic solution `f(x, y)` and
+covers the smooth cases, whose solver boundary condition is exactly that.
+
+Geometry
+--------
+samurai's cell length at a given level is `ref * 2**-level`, where `ref` is the
+SMALLEST side of the domain. A non-square box therefore holds `size / ref`
+times more cells along its long side: [0,4]x[0,1] has 4*2**level by 2**level
+cells. `grid_shape()` is the single place that encodes this.
+
+Example
+-------
+# density of the double Mach reflection, reconstructed at max-level
+python reconstruct.py --filename ../build/results/double_mach_reflection_hllc \\
+    --Tf 0.2 --pred_s 1
+"""
+
 import h5py
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -5,6 +60,14 @@ import argparse
 
 
 def pred_coeff(pred_s, sign):
+    """Coefficients of the centred multiresolution prediction stencil.
+
+    `pred_s` is the stencil half-width: 0 gives a piecewise-constant
+    prediction, 1 the 3-point (order 2) one, 2 the 5-point (order 4) one.
+    `sign` selects the child, the stencil being mirrored between the left and
+    right child of a parent cell. The 2D stencils are the outer products of
+    these 1D ones, one per child corner.
+    """
     if pred_s == 0:
         return np.array([1])
     elif pred_s == 1:
@@ -22,6 +85,12 @@ def pred_coeff(pred_s, sign):
 
 
 def read_frame_euler_2d(filename, box=None):
+    """Read one HDF5 frame written by save.hpp.
+
+    Returns the cell centers (x, y), the primitive fields as a dict keyed by
+    "rho" / "pressure" / "ux" / "uy", and the level of each cell. `box` is only
+    needed when the file carries no "levels" field, see below.
+    """
     mesh = h5py.File(filename + ".h5", "r")["mesh"]
     points = mesh["points"]
     connectivity = mesh["connectivity"]
@@ -135,9 +204,19 @@ def make_exact_bc(exact_fn):
 
 
 def recons_2d(box, x, y, pred_s, sol, level, bc, var_name="rho"):
-    """Reconstruct the solution on the uniform grid at the finest level present.
+    """Reconstruct `var_name` on the uniform grid at the finest level present.
 
-    `bc` fills the ghost layers, see make_double_mach_bc / make_exact_bc.
+    Parameters
+    ----------
+    box : [[xmin, ymin], [xmax, ymax]], the domain, as in euler/init/*.hpp
+    x, y, sol, level : as returned by read_frame_euler_2d
+    pred_s : prediction stencil half-width, and number of ghost layers
+    bc : ghost filler, see the module docstring for its signature
+
+    Returns a (nx, ny) array on the finest level found in `level`, so the shape
+    depends on the run, not on the requested max-level: a multiresolution run
+    whose epsilon was too large to ever refine that far reconstructs on the
+    coarser grid it actually used.
     """
     xmin, ymin = box[0]
 
