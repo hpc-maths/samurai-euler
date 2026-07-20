@@ -34,6 +34,9 @@ Reading the table
     N      number of leaf cells
     nlev   number of distinct cell sizes: 1 on a uniform mesh, > 1 when the
            mesh really carries level interfaces
+    compr  compression rate, N over the number of cells a uniform mesh at the
+           same finest resolution would hold. Only shown when at least one mesh
+           is adapted, being 1 by construction otherwise
 
 Reference results (density, Tf = 1, HLLC)
 -----------------------------------------
@@ -224,22 +227,35 @@ def analyse_reconstructed(case, filename, t, var, pred_s=1):
 
     h = np.sqrt(np.prod(np.diff(np.array(box), axis=0))) * 2.0**-max_level
     area = np.full(num.shape, h * h)
-    return (h, num.size, 1) + errors(num, ref, area)
+    # the reconstructed grid is uniform, so N is its own cell count, while nlev
+    # and the compression rate describe the adapted mesh the run really used
+    nlev = np.unique(level).size
+    return (h, num.size, nlev, level.size / num.size) + errors(num, ref, area)
+
+
+def uniform_cell_count(case, h):
+    """Number of cells a uniform mesh of size h would hold on this domain."""
+    (xmin, ymin), (xmax, ymax) = BOX[case]
+    return round((xmax - xmin) / h) * round((ymax - ymin) / h)
 
 
 def analyse(case, filename, t, var):
-    """Return (h, ncells, nlev, L1, L2, Linf) for one output file.
+    """Return (h, ncells, nlev, compr, L1, L2, Linf) for one output file.
 
     h is the size of the finest cell of the mesh, i.e. the resolution the
     convergence rate is measured against. nlev is the number of distinct cell
     sizes: it is 1 on a uniform mesh, and tells whether a run that claims to be
-    adapted really carries level interfaces.
+    adapted really carries level interfaces. compr is the compression rate, the
+    number of cells of the adapted mesh over the number a uniform mesh at the
+    same finest resolution would hold, so it is 1 on a uniform mesh and the
+    smaller the more the multiresolution saved.
     """
     x, y, area, sol = read_frame(filename)
     ref = EXACT[case](x, y, t)
     h = np.sqrt(area.min())
     nlev = np.unique(np.round(np.log2(area / area.min()))).size
-    return (h, area.size, nlev) + errors(sol[var], ref[var], area)
+    compr = area.size / uniform_cell_count(case, h)
+    return (h, area.size, nlev, compr) + errors(sol[var], ref[var], area)
 
 
 # ---------------------------------------------------------------------------
@@ -298,16 +314,26 @@ def fit_order(h, err):
     return np.polyfit(np.log(h), np.log(err), 1)[0]
 
 
-def print_table(case, var, t, h, ncells, nlev, err):
-    """Print the error table, the order per resolution and the fitted order."""
+def print_table(case, var, t, h, ncells, nlev, compr, err):
+    """Print the error table, the order per resolution and the fitted order.
+
+    The compression rate is only shown when at least one mesh is adapted: on a
+    uniform mesh it is 1 by construction and the column carries no information.
+    """
+    adapted = any(n > 1 for n in nlev)
+
     print(f"\n# case={case}  var={var}  t={t}")
     header = f"{'h':>12} {'N':>10} {'nlev':>5}"
+    if adapted:
+        header += f" {'compr':>7}"
     for name in NORMS:
         header += f" {name:>12} {'order':>7}"
     print(header)
 
     for k in range(len(h)):
         line = f"{h[k]:12.4e} {ncells[k]:10d} {nlev[k]:5d}"
+        if adapted:
+            line += f" {100.0 * compr[k]:6.1f}%"
         for name in NORMS:
             order = ""
             if k > 0 and err[name][k] > 0.0 and err[name][k - 1] > 0.0 and h[k] != h[k - 1]:
@@ -479,18 +505,19 @@ def main():
     else:
         parser.error("give either some files or --start-level")
 
-    h, ncells, nlev = [], [], []
+    h, ncells, nlev, compr = [], [], [], []
     err = {name: [] for name in NORMS}
     for f in files:
         measure = analyse_reconstructed if args.reconstruct else analyse
-        hk, nk, lk, l1, l2, linf = measure(args.case, f, args.Tf, args.var)
+        hk, nk, lk, ck, l1, l2, linf = measure(args.case, f, args.Tf, args.var)
         h.append(hk)
         ncells.append(nk)
         nlev.append(lk)
+        compr.append(ck)
         for name, value in zip(NORMS, (l1, l2, linf)):
             err[name].append(value)
 
-    print_table(args.case, args.var, args.Tf, h, ncells, nlev, err)
+    print_table(args.case, args.var, args.Tf, h, ncells, nlev, compr, err)
 
     if not args.no_plot and len(h) > 1 and not all(is_exact(e) for e in err.values()):
         plot_convergence(args.case, args.var, h, err, args.output)
