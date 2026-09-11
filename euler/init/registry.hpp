@@ -33,10 +33,14 @@
 //  concrete state law. Every monofluid case is an ideal gas, hence the default;
 //  a two-phase model would instantiate its own registry on StiffenedGas.
 //
-//  Registration is explicit: each case exposes `register_me<Field>()` and
-//  `register_all<Field>()` in cases.hpp lists them. That costs one line per case
-//  compared to a self-registering macro, and buys a single readable place where
-//  the available cases — and the dimension each supports — can be read off.
+//  A test case header is self-sufficient: it exposes `definition<Field>()` and
+//  registers itself with one of the macros at the bottom of this file, so adding
+//  a case means adding one file and one #include to cases.hpp, never editing a
+//  list somewhere else. Self-registration needs a concrete field type, which is
+//  why the dimension is spelled out in the macro name: a case written dimension
+//  agnostically uses REGISTER_TEST_CASE_2D_3D and is then available to both
+//  binaries. The unused instantiation that costs euler_2d measures at about a
+//  second of compile time, which is not a reason to give the property up.
 // =============================================================================
 
 namespace test_case
@@ -109,9 +113,30 @@ namespace test_case
         std::map<std::string, test_case_t> test_cases_;
     };
 
+    // Registering by constructing an object lets a test case header add itself to
+    // the registry before main() runs. The registry is a function-local static,
+    // so it is built on first use and the order of these objects across headers
+    // does not matter.
     template <class Field, class Eos = EOS::IdealGas>
-    void register_test_case(const std::string& name, TestCase<Field, Eos> test_case)
+    struct Registrar
     {
-        TestCaseRegistry<Field, Eos>::instance().register_test_case(name, std::move(test_case));
-    }
+        Registrar(const std::string& name, TestCase<Field, Eos> test_case)
+        {
+            TestCaseRegistry<Field, Eos>::instance().register_test_case(name, std::move(test_case));
+        }
+    };
 }
+
+// NAME is the string `--test-case` accepts, NS the namespace holding the case's
+// `definition<Field>()`. Use one of these at the bottom of the case header.
+#define REGISTER_TEST_CASE_FOR_DIM(NAME, NS, DIM)                                                                                      \
+    namespace                                                                                                                          \
+    {                                                                                                                                  \
+        const ::test_case::Registrar<config<DIM>::field_t> registrar_##NAME##_##DIM##d{#NAME, NS::definition<config<DIM>::field_t>()}; \
+    }
+
+#define REGISTER_TEST_CASE_2D(NAME, NS) REGISTER_TEST_CASE_FOR_DIM(NAME, NS, 2)
+
+#define REGISTER_TEST_CASE_2D_3D(NAME, NS)  \
+    REGISTER_TEST_CASE_FOR_DIM(NAME, NS, 2) \
+    REGISTER_TEST_CASE_FOR_DIM(NAME, NS, 3)

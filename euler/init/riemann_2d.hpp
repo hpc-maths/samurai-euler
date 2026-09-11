@@ -106,23 +106,70 @@ namespace test_case::riemann_2d
           PrimState<2>{1., 1., {0., -0.6259}}}
     };
 
-    inline void register_one(const std::string& name, const Config& c)
+    // One definition per configuration; `--riemann-config` will replace these
+    // three entries by a single parameterised case once the constants are fixed.
+    template <class Field, const Config& c>
+    test_case::TestCase<Field> definition_for()
     {
-        test_case::register_test_case<field_t>(name,
-                                               {.box = &box_fn<2>,
-                                                .init =
-                                                    [&c](field_t& u, const typename field_t::cell_t& cell, const EOS::IdealGas& eos)
-                                                {
-                                                    init_from(c, u, cell, eos);
-                                                },
-                                                .bc  = &bc_fn,
-                                                .eos = EOS::ideal_gas(1.4)});
+        static_assert(Field::dim == 2, "this test case is two-dimensional");
+        return {.box = &box_fn<2>,
+                .init =
+                    [](Field& u, const typename Field::cell_t& cell, const EOS::IdealGas& eos)
+                {
+                    init_from(c, u, cell, eos);
+                },
+                .bc  = &bc_fn,
+                .eos = EOS::ideal_gas(1.4)};
     }
 
-    inline void register_me()
+    template <class Field>
+    test_case::TestCase<Field> definition_config3()
     {
-        register_one("riemann2d_config3", config_3);
-        register_one("riemann2d_config4", config_4);
-        register_one("riemann2d_config12", config_12);
+        return definition_for<Field, config_3>();
+    }
+
+    template <class Field>
+    test_case::TestCase<Field> definition_config4()
+    {
+        return definition_for<Field, config_4>();
+    }
+
+    template <class Field>
+    test_case::TestCase<Field> definition_config12()
+    {
+        return definition_for<Field, config_12>();
     }
 }
+
+// The macro expects a `definition` in the namespace it is given, so each
+// configuration gets a thin namespace of its own.
+namespace test_case::riemann_2d_config3
+{
+    template <class Field>
+    auto definition()
+    {
+        return riemann_2d::definition_config3<Field>();
+    }
+}
+
+namespace test_case::riemann_2d_config4
+{
+    template <class Field>
+    auto definition()
+    {
+        return riemann_2d::definition_config4<Field>();
+    }
+}
+
+namespace test_case::riemann_2d_config12
+{
+    template <class Field>
+    auto definition()
+    {
+        return riemann_2d::definition_config12<Field>();
+    }
+}
+
+REGISTER_TEST_CASE_2D(riemann2d_config3, test_case::riemann_2d_config3)
+REGISTER_TEST_CASE_2D(riemann2d_config4, test_case::riemann_2d_config4)
+REGISTER_TEST_CASE_2D(riemann2d_config12, test_case::riemann_2d_config12)

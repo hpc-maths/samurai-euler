@@ -64,10 +64,10 @@ namespace test_case::free_stream
     }
 
     template <class Field>
-    void register_me()
+    test_case::TestCase<Field> definition()
     {
-        test_case::register_test_case<Field>(
-            "free_stream",
-            {.box = &box_fn<Field::dim>, .init = &init_fn<Field>, .bc = &bc_fn<Field>, .eos = EOS::ideal_gas(1.4)});
+        return {.box = &box_fn<Field::dim>, .init = &init_fn<Field>, .bc = &bc_fn<Field>, .eos = EOS::ideal_gas(1.4)};
     }
 }
+
+REGISTER_TEST_CASE_2D_3D(free_stream, test_case::free_stream)

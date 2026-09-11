@@ -74,8 +74,12 @@ namespace test_case::sod
         return samurai::Box<double, dim>(min_corner, max_corner);
     }
 
-    inline void register_me()
+    template <class Field>
+    test_case::TestCase<Field> definition()
     {
-        test_case::register_test_case<field_t>("sod", {.box = &box_fn<2>, .init = &init_fn, .bc = &bc_fn, .eos = EOS::ideal_gas(1.4)});
+        static_assert(Field::dim == 2, "this test case is two-dimensional");
+        return {.box = &box_fn<2>, .init = &init_fn, .bc = &bc_fn, .eos = EOS::ideal_gas(1.4)};
     }
 }
+
+REGISTER_TEST_CASE_2D(sod, test_case::sod)

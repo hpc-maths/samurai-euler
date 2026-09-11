@@ -97,10 +97,6 @@ int main(int argc, char* argv[])
 
     auto& app = samurai::initialize("Euler equations solver (2D)", argc, argv);
 
-    // The registry must be populated before the command line is parsed, so that
-    // --test-case can validate its argument against the available cases.
-    test_case::register_all<field_t>();
-
     double Tf  = .25;
     double cfl = 0.4;
     double t   = 0.;
