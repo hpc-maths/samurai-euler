@@ -30,7 +30,7 @@
 // =============================================================================
 
 template <class Field, class Eos>
-void limit_positivity(Field& u, const Eos& eos, double rho_min = 1e-10, double p_min = 1e-10)
+void limit_positivity(Field& u, Eos eos, double rho_min = 1e-10, double p_min = 1e-10)
 {
     static constexpr std::size_t dim = std::decay_t<Field>::dim;
     using EulerConsVar               = EulerLayout<dim>;

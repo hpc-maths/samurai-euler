@@ -40,13 +40,13 @@ namespace test_case::free_stream
     }
 
     template <class Field>
-    void init_fn(Field& u, const typename Field::cell_t& cell, const EOS::IdealGas& eos)
+    void init_fn(Field& u, const typename Field::cell_t& cell, EOS::IdealGas eos)
     {
         u[cell] = prim2cons<Field::dim>(uniform_state<Field::dim>(), eos);
     }
 
     template <class Field>
-    void bc_fn(Field& u, double& /*t*/, const EOS::IdealGas& eos)
+    void bc_fn(Field& u, double& /*t*/, EOS::IdealGas eos)
     {
         // Impose the exact uniform state on every boundary.
         bc::imposed(u, uniform_state<Field::dim>(), eos);

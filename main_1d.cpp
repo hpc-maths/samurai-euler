@@ -23,7 +23,7 @@ double rhoR = 1.;
 double pR   = 0.4;
 double vR   = 2.;
 
-void init(auto& u, const auto& eos)
+void init(auto& u, auto eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
     using EulerConsVar               = EulerLayout<dim>;
@@ -31,7 +31,7 @@ void init(auto& u, const auto& eos)
     auto& mesh = u.mesh();
 
     u.resize();
-    auto set_conserved = [&eos](auto&& u, double rho, double p, double v)
+    auto set_conserved = [eos](auto&& u, double rho, double p, double v)
     {
         u[EulerConsVar::rho] = rho;
         double norm2         = 0.;

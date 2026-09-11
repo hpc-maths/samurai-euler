@@ -33,7 +33,7 @@ namespace test_case::kelvin_helmholtz
     inline constexpr double sigma = 0.05; // interface thickness of the seed
     inline constexpr int mode     = 2;    // number of billows (wavenumber = 2*mode)
 
-    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, const EOS::IdealGas& eos)
+    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, EOS::IdealGas eos)
     {
         const auto c   = cell.center();
         const double x = c[0];
@@ -55,7 +55,7 @@ namespace test_case::kelvin_helmholtz
         u[cell] = prim2cons<2>(state, eos);
     }
 
-    inline void bc_fn(field_t& u, double& /*t*/, const EOS::IdealGas& /*eos*/)
+    inline void bc_fn(field_t& u, double& /*t*/, EOS::IdealGas /*eos*/)
     {
         bc::outflow(u);
     }

@@ -9,7 +9,7 @@
 #include "schemes/rusanov.hpp"
 
 template <class Field, class Eos>
-auto get_fv_scheme(const std::string& scheme, const Eos& eos)
+auto get_fv_scheme(const std::string& scheme, Eos eos)
 {
     if (scheme == "rusanov")
     {

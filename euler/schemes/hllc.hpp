@@ -9,7 +9,7 @@
 #include "flux.hpp"
 
 template <std::size_t d, std::size_t Dim, class Eos>
-auto compute_star_state(const PrimState<Dim>& prim, double s, double s_star, const Eos& eos)
+auto compute_star_state(const PrimState<Dim>& prim, double s, double s_star, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
     xt::xtensor_fixed<double, xt::xshape<EulerConsVar::size>> q_star;
@@ -32,7 +32,7 @@ auto compute_star_state(const PrimState<Dim>& prim, double s, double s_star, con
 }
 
 template <class Field, class Eos>
-auto make_euler_hllc(const Eos& eos)
+auto make_euler_hllc(Eos eos)
 {
     static constexpr std::size_t dim          = Field::dim;
     static constexpr std::size_t stencil_size = 2;

@@ -14,7 +14,7 @@ namespace mpi = boost::mpi;
 
 #include "variables.hpp"
 
-auto get_max_lambda(const auto& u, const auto& eos)
+auto get_max_lambda(const auto& u, auto eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
     double res                       = 0.;
@@ -59,7 +59,7 @@ void check_positive_density(const auto& u)
                            });
 }
 
-void check_positive_pressure(const auto& u, const auto& eos)
+void check_positive_pressure(const auto& u, auto eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
 
@@ -84,7 +84,7 @@ void check_positive_pressure(const auto& u, const auto& eos)
                            });
 }
 
-void check(const auto& u, const auto& eos)
+void check(const auto& u, auto eos)
 {
     check_positive_density(u);
     check_positive_pressure(u, eos);

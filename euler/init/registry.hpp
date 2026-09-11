@@ -49,10 +49,10 @@ namespace test_case
     using BoxFunc = std::function<samurai::Box<double, Field::dim>()>;
 
     template <class Field, class Eos>
-    using InitFunc = std::function<void(Field&, const typename Field::cell_t&, const Eos&)>;
+    using InitFunc = std::function<void(Field&, const typename Field::cell_t&, Eos)>;
 
     template <class Field, class Eos>
-    using BCFunc = std::function<void(Field&, double&, const Eos&)>;
+    using BCFunc = std::function<void(Field&, double&, Eos)>;
 
     template <class Field, class Eos = EOS::IdealGas>
     struct TestCase

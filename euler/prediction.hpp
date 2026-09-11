@@ -60,7 +60,7 @@ class Euler_prediction_op : public samurai::field_operator_base<dim, TInterval>
 
     INIT_OPERATOR(Euler_prediction_op)
 
-    inline void operator()(samurai::Dim<dim>, auto& dest, const auto& src, const auto& eos) const
+    inline void operator()(samurai::Dim<dim>, auto& dest, const auto& src, auto eos) const
     {
         using EulerConsVar = EulerLayout<dim>;
         using field_t      = std::decay_t<decltype(src)>;

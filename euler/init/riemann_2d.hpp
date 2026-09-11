@@ -40,7 +40,7 @@ namespace test_case::riemann_2d
         std::array<PrimState<2>, 4> q;
     };
 
-    inline void init_from(const Config& c, field_t& u, const typename field_t::cell_t& cell, const EOS::IdealGas& eos)
+    inline void init_from(const Config& c, field_t& u, const typename field_t::cell_t& cell, EOS::IdealGas eos)
     {
         const auto x = cell.center();
 
@@ -62,7 +62,7 @@ namespace test_case::riemann_2d
         }
     }
 
-    inline void bc_fn(field_t& u, double& /*t*/, const EOS::IdealGas& /*eos*/)
+    inline void bc_fn(field_t& u, double& /*t*/, EOS::IdealGas /*eos*/)
     {
         bc::outflow(u);
     }
@@ -114,7 +114,7 @@ namespace test_case::riemann_2d
         static_assert(Field::dim == 2, "this test case is two-dimensional");
         return {.box = &box_fn<2>,
                 .init =
-                    [](Field& u, const typename Field::cell_t& cell, const EOS::IdealGas& eos)
+                    [](Field& u, const typename Field::cell_t& cell, EOS::IdealGas eos)
                 {
                     init_from(c, u, cell, eos);
                 },

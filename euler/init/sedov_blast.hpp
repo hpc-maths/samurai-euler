@@ -52,7 +52,7 @@ namespace test_case::sedov_blast
     }
 
     template <class Field>
-    void init_fn(Field& u, const typename Field::cell_t& cell, const EOS::IdealGas& eos)
+    void init_fn(Field& u, const typename Field::cell_t& cell, EOS::IdealGas eos)
     {
         static constexpr std::size_t dim = Field::dim;
         using EulerConsVar               = EulerLayout<dim>;
@@ -78,7 +78,7 @@ namespace test_case::sedov_blast
     }
 
     template <class Field>
-    void bc_fn(Field& u, double& /*t*/, const EOS::IdealGas& /*eos*/)
+    void bc_fn(Field& u, double& /*t*/, EOS::IdealGas /*eos*/)
     {
         bc::outflow(u);
     }

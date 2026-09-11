@@ -83,10 +83,10 @@ namespace bc
     template <class Field>
     auto outflow(Field& u)
     {
-        return []<std::size_t... I>(Field& field, std::index_sequence<I...>)
+        return [&]<std::size_t... I>(std::index_sequence<I...>)
         {
-            return samurai::make_bc<samurai::Neumann<1>>(field, (static_cast<void>(I), 0.)...);
-        }(u, std::make_index_sequence<Field::n_comp>{});
+            return samurai::make_bc<samurai::Neumann<1>>(u, (static_cast<void>(I), 0.)...);
+        }(std::make_index_sequence<Field::n_comp>{});
     }
 
     // Solid wall on every boundary.
@@ -98,7 +98,7 @@ namespace bc
 
     // A uniform state imposed on every boundary.
     template <class Field, class Eos>
-    auto imposed(Field& u, const PrimState<Field::dim>& state, const Eos& eos)
+    auto imposed(Field& u, const PrimState<Field::dim>& state, Eos eos)
     {
         const auto cons = prim2cons<Field::dim>(state, eos);
 

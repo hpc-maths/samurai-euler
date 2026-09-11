@@ -6,7 +6,7 @@
 #include "../variables.hpp"
 
 template <std::size_t d, std::size_t Dim, class Eos>
-auto compute_flux(const PrimState<Dim>& prim, const Eos& eos)
+auto compute_flux(const PrimState<Dim>& prim, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 

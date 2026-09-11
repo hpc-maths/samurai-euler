@@ -40,7 +40,7 @@ namespace test_case::double_mach_reflection
         xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
     };
 
-    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, const EOS::IdealGas& eos)
+    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, EOS::IdealGas eos)
     {
         const auto x = cell.center();
 
@@ -54,7 +54,7 @@ namespace test_case::double_mach_reflection
         }
     }
 
-    inline void bc_fn(field_t& u, double& t, const EOS::IdealGas& eos)
+    inline void bc_fn(field_t& u, double& t, EOS::IdealGas eos)
     {
         static constexpr std::size_t dim = field_t::dim;
         using EulerConsVar               = EulerLayout<dim>;

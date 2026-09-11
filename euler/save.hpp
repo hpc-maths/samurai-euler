@@ -8,7 +8,7 @@
 
 #include "variables.hpp"
 
-void save(const std::string& path, const std::string& filename, const auto& field, const auto& eos)
+void save(const std::string& path, const std::string& filename, const auto& field, auto eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(field)>::dim;
     auto& mesh                       = field.mesh();

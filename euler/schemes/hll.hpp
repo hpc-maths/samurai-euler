@@ -9,7 +9,7 @@
 #include "flux.hpp"
 
 template <class Field, class Eos>
-auto make_euler_hll(const Eos& eos)
+auto make_euler_hll(Eos eos)
 {
     static constexpr std::size_t dim          = Field::dim;
     static constexpr std::size_t stencil_size = 2;

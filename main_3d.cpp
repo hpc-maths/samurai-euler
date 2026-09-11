@@ -31,7 +31,7 @@
 // mesh is uniformly refined by one level, the solution is re-initialized on it
 // and the MR adaptation coarsens back where the details are small.
 template <class Field, class PredFn>
-void init_sol(Field& u, auto& config, int jump, auto& mra_config, PredFn&& prediction_fn, const std::string& test_case_name, const auto& eos)
+void init_sol(Field& u, auto& config, int jump, auto& mra_config, PredFn&& prediction_fn, const std::string& test_case_name, auto eos)
 {
     samurai::ScopedTimer timer("initialization");
     static constexpr std::size_t dim = Field::dim;
@@ -160,9 +160,12 @@ int main(int argc, char* argv[])
     auto mesh = samurai::mra::make_empty_mesh(config);
     auto u    = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
 
-    auto prediction_fn = [&eos](auto& new_field, const auto& old_field)
+    // The operator function stores what it is handed; pass a prvalue so that it
+    // owns its own copy of the equation of state rather than a reference to this
+    // closure's member.
+    auto prediction_fn = [eos](auto& new_field, const auto& old_field)
     {
-        return make_field_operator_function<Euler_prediction_op>(new_field, old_field, eos);
+        return make_field_operator_function<Euler_prediction_op>(new_field, old_field, EOS::IdealGas{eos});
     };
 
     auto MRadaptation = samurai::make_MRAdapt(prediction_fn, u);

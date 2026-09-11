@@ -29,7 +29,7 @@ struct PrimState
 };
 
 template <std::size_t Dim, class Eos>
-auto cons2prim(const xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size>>& conserved, const Eos& eos)
+auto cons2prim(const xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size>>& conserved, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
@@ -46,7 +46,7 @@ auto cons2prim(const xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size
 }
 
 template <std::size_t Dim, class Eos>
-auto prim2cons(const PrimState<Dim>& primitives, const Eos& eos)
+auto prim2cons(const PrimState<Dim>& primitives, Eos eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 

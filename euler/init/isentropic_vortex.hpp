@@ -54,19 +54,19 @@ namespace test_case::isentropic_vortex
     inline constexpr double y0      = 0.;      // initial vortex center y (eq. 24)
 
     // free-stream Mach number (Table 1) and vortex strength (eq. 20)
-    inline double M_inf(const EOS::IdealGas& eos)
+    inline double M_inf(EOS::IdealGas eos)
     {
         return std::sqrt(2. / eos.gamma);
     }
 
-    inline double beta(const EOS::IdealGas& eos)
+    inline double beta(EOS::IdealGas eos)
     {
         return M_inf(eos) * 5. * std::sqrt(2.) / (4. * pi) * std::exp(0.5);
     }
 
     // Exact primitive state at point (x, y) and time t. Implements eqs. (20)-(24)
     // of the reference paper (periodic, nearest-image evaluation).
-    inline PrimState<2> exact_state(double x, double y, double t, const EOS::IdealGas& eos)
+    inline PrimState<2> exact_state(double x, double y, double t, EOS::IdealGas eos)
     {
         constexpr double domain_length = 2. * L; // periodic length in each direction
 
@@ -104,13 +104,13 @@ namespace test_case::isentropic_vortex
         };
     }
 
-    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, const EOS::IdealGas& eos)
+    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, EOS::IdealGas eos)
     {
         const auto x = cell.center();
         u[cell]      = prim2cons<2>(exact_state(x[0], x[1], 0., eos), eos);
     }
 
-    inline void bc_fn(field_t& u, double& t, const EOS::IdealGas& eos)
+    inline void bc_fn(field_t& u, double& t, EOS::IdealGas eos)
     {
         // Impose the exact (time-dependent) solution on every boundary.
         // `t` is the simulation time, captured by reference on purpose: it must
