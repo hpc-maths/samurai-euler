@@ -3,53 +3,66 @@
 
 #pragma once
 
+#include <cmath>
 #include <numbers>
 
-#include <samurai/bc.hpp>
+#include <samurai/box.hpp>
 
+#include "../bc.hpp"
 #include "../variables.hpp"
 #include "registry.hpp"
 
+// =============================================================================
+//  Sod shock tube, rotated by 45 degrees
+// -----------------------------------------------------------------------------
+//  The classical 1D Riemann problem, laid out along a diagonal of a 2D domain so
+//  that the solution is not aligned with the mesh. Any directional bias in the
+//  scheme or in the adaptation shows up as a distortion of what should stay a
+//  planar wave.
+// =============================================================================
+
 namespace test_case::sod
 {
-    double theta = std::numbers::pi / 4.;
-    
-    double Rdx = std::sin(theta) ;
-    double Rdy = std::cos(theta) ;
-    double k  = 0.5 / Rdy ; 
-    double x0 = 0.5 + k * Rdx ; //0.5 - 0.5*Rdx/Rdy
+    using field_t = config<2>::field_t;
 
-    PrimState<2> left_state{
+    inline const double theta = std::numbers::pi / 4.;
+
+    inline const double Rdx = std::sin(theta);
+    inline const double Rdy = std::cos(theta);
+    inline const double k   = 0.5 / Rdy;
+    inline const double x0  = 0.5 + k * Rdx;
+
+    inline const PrimState<2> left_state{
         1.,
         1.,
         xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
     };
 
-    PrimState<2> right_state{
+    inline const PrimState<2> right_state{
         0.125,
         0.1,
         xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
     };
 
-    auto init_fn = [](auto& u, auto& cell)
+    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, const EOS::IdealGas& eos)
     {
-        auto x = cell.center();
+        const auto x = cell.center();
 
-        const double y_theta = (x0-x[0]) * Rdy/Rdx;
+        const double y_theta = (x0 - x[0]) * Rdy / Rdx;
 
         if (x[1] < y_theta)
         {
-            u[cell] = prim2cons<2>(left_state);
+            u[cell] = prim2cons<2>(left_state, eos);
         }
         else
         {
-            u[cell] = prim2cons<2>(right_state);
+            u[cell] = prim2cons<2>(right_state, eos);
         }
-    };
+    }
 
-    void bc_fn(auto& u, double /*t*/)
+    inline void bc_fn(field_t& u, double& /*t*/, const EOS::IdealGas& /*eos*/)
     {
-        samurai::make_bc<samurai::Neumann<1>>(u, 0., 0., 0., 0.);
+        bc::outflow(u);
     }
 
     template <std::size_t dim>
@@ -61,6 +74,8 @@ namespace test_case::sod
         return samurai::Box<double, dim>(min_corner, max_corner);
     }
 
+    inline void register_me()
+    {
+        test_case::register_test_case<field_t>("sod", {.box = &box_fn<2>, .init = &init_fn, .bc = &bc_fn, .eos = EOS::ideal_gas(1.4)});
+    }
 }
-
-REGISTER_TEST_CASE(sod, test_case::sod::box_fn, test_case::sod::init_fn, test_case::sod::bc_fn)

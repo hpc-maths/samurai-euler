@@ -60,7 +60,7 @@ class Euler_prediction_op : public samurai::field_operator_base<dim, TInterval>
 
     INIT_OPERATOR(Euler_prediction_op)
 
-    inline void operator()(samurai::Dim<dim>, auto& dest, const auto& src) const
+    inline void operator()(samurai::Dim<dim>, auto& dest, const auto& src, const auto& eos) const
     {
         using EulerConsVar = EulerLayout<dim>;
         using field_t      = std::decay_t<decltype(src)>;
@@ -101,7 +101,7 @@ class Euler_prediction_op : public samurai::field_operator_base<dim, TInterval>
                     auto xt_child = detail::tail_as_xt(child);
                     auto rho      = dest(EulerConsVar::rho, level + 1, i_f + child[0], index_f + xt_child);
                     auto e        = xt::eval(dest(EulerConsVar::rhoE, level + 1, i_f + child[0], index_f + xt_child)
-                                      / dest(EulerConsVar::rho, level + 1, i_f + child[0], index_f + xt_child));
+                                             / dest(EulerConsVar::rho, level + 1, i_f + child[0], index_f + xt_child));
 
                     for (std::size_t d = 0; d < dim; ++d)
                     {
@@ -109,7 +109,7 @@ class Euler_prediction_op : public samurai::field_operator_base<dim, TInterval>
                                  / dest(EulerConsVar::rho, level + 1, i_f + child[0], index_f + xt_child);
                         e -= 0.5 * v_d * v_d;
                     }
-                    p = EOS::stiffened_gas::p(rho, e);
+                    p = eos.p(rho, e);
                 };
 
                 detail::zip_apply(compute_pressure, pressure, detail::cube_children<dim>());

@@ -14,7 +14,7 @@ namespace mpi = boost::mpi;
 
 #include "variables.hpp"
 
-auto get_max_lambda(const auto& u)
+auto get_max_lambda(const auto& u, const auto& eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
     double res                       = 0.;
@@ -24,9 +24,9 @@ auto get_max_lambda(const auto& u)
     samurai::for_each_cell(mesh,
                            [&](const auto& cell)
                            {
-                               auto prim = cons2prim<dim>(u[cell]);
+                               auto prim = cons2prim<dim>(u[cell], eos);
 
-                               auto c = EOS::stiffened_gas::c(prim.rho, prim.p);
+                               auto c = eos.c(prim.rho, prim.p);
                                for (std::size_t d = 0; d < dim; ++d)
                                {
                                    res = std::max(std::abs(prim.v[d]) + c, res);
@@ -59,7 +59,7 @@ void check_positive_density(const auto& u)
                            });
 }
 
-void check_positive_pressure(const auto& u)
+void check_positive_pressure(const auto& u, const auto& eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
 
@@ -76,7 +76,7 @@ void check_positive_pressure(const auto& u)
                                    double v = u[cell][EulerLayout<dim>::mom(d)] / rho;
                                    norm2 += v * v;
                                }
-                               double p = EOS::stiffened_gas::p(rho, e - 0.5 * norm2);
+                               double p = eos.p(rho, e - 0.5 * norm2);
                                if (p <= 0.)
                                {
                                    throw std::runtime_error("Negative pressure detected");
@@ -84,8 +84,8 @@ void check_positive_pressure(const auto& u)
                            });
 }
 
-void check(const auto& u)
+void check(const auto& u, const auto& eos)
 {
     check_positive_density(u);
-    check_positive_pressure(u);
+    check_positive_pressure(u, eos);
 }

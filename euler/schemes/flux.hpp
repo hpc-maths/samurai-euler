@@ -5,15 +5,15 @@
 
 #include "../variables.hpp"
 
-template <std::size_t d, std::size_t Dim>
-auto compute_flux(const PrimState<Dim>& prim)
+template <std::size_t d, std::size_t Dim, class Eos>
+auto compute_flux(const PrimState<Dim>& prim, const Eos& eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
 
     auto flux = xt::xtensor_fixed<double, xt::xshape<EulerConsVar::size>>{};
 
     flux[EulerConsVar::rho]  = prim.rho * prim.v[d];
-    auto e                   = EOS::stiffened_gas::e(prim.rho, prim.p);
+    auto e                   = eos.e(prim.rho, prim.p);
     flux[EulerConsVar::rhoE] = (prim.rho * e + prim.p) * prim.v[d];
     for (std::size_t i = 0; i < Dim; ++i)
     {

@@ -8,8 +8,8 @@
 #include "../variables.hpp"
 #include "flux.hpp"
 
-template <std::size_t d, std::size_t Dim>
-auto compute_star_state(const PrimState<Dim>& prim, double s, double s_star)
+template <std::size_t d, std::size_t Dim, class Eos>
+auto compute_star_state(const PrimState<Dim>& prim, double s, double s_star, const Eos& eos)
 {
     using EulerConsVar = EulerLayout<Dim>;
     xt::xtensor_fixed<double, xt::xshape<EulerConsVar::size>> q_star;
@@ -18,7 +18,7 @@ auto compute_star_state(const PrimState<Dim>& prim, double s, double s_star)
 
     q_star[EulerConsVar::rho] = rho_star;
 
-    auto e                     = EOS::stiffened_gas::e(prim.rho, prim.p);
+    auto e                     = eos.e(prim.rho, prim.p);
     q_star[EulerConsVar::rhoE] = rho_star * (e + (s_star - prim.v[d]) * (s_star + prim.p / (prim.rho * (s - prim.v[d]))));
 
     for (std::size_t i = 0; i < Dim; ++i)
@@ -31,14 +31,13 @@ auto compute_star_state(const PrimState<Dim>& prim, double s, double s_star)
     return q_star;
 }
 
-template <class Field>
-auto make_euler_hllc()
+template <class Field, class Eos>
+auto make_euler_hllc(const Eos& eos)
 {
     static constexpr std::size_t dim          = Field::dim;
     static constexpr std::size_t stencil_size = 2;
 
-    using eos_model = EOS::stiffened_gas;
-    using cfg       = samurai::FluxConfig<samurai::SchemeType::NonLinear, stencil_size, Field, Field>;
+    using cfg = samurai::FluxConfig<samurai::SchemeType::NonLinear, stencil_size, Field, Field>;
 
     samurai::FluxDefinition<cfg> hllc;
 
@@ -48,18 +47,18 @@ auto make_euler_hllc()
             static constexpr std::size_t d = _d();
 
             hllc[d].cons_flux_function =
-                [](samurai::FluxValue<cfg>& flux, const samurai::StencilData<cfg>& /*data*/, const samurai::StencilValues<cfg>& field)
+                [eos](samurai::FluxValue<cfg>& flux, const samurai::StencilData<cfg>& /*data*/, const samurai::StencilValues<cfg>& field)
             {
                 static constexpr std::size_t left  = 0;
                 static constexpr std::size_t right = 1;
 
                 const auto& qL = field[left];
-                auto primL     = cons2prim<dim>(qL);
-                auto cL        = eos_model::c(primL.rho, primL.p);
+                auto primL     = cons2prim<dim>(qL, eos);
+                auto cL        = eos.c(primL.rho, primL.p);
 
                 const auto& qR = field[right];
-                auto primR     = cons2prim<dim>(qR);
-                auto cR        = eos_model::c(primR.rho, primR.p);
+                auto primR     = cons2prim<dim>(qR, eos);
+                auto cR        = eos.c(primR.rho, primR.p);
 
                 double sL = std::min(primL.v[d] - cL, primR.v[d] - cR);
                 double sR = std::max(primL.v[d] + cL, primR.v[d] + cR);
@@ -68,19 +67,19 @@ auto make_euler_hllc()
 
                 if (sL >= 0)
                 {
-                    flux = compute_flux<d>(primL);
+                    flux = compute_flux<d>(primL, eos);
                 }
                 else if (sL < 0 && sM >= 0)
                 {
-                    flux = compute_flux<d>(primL) + sL * (compute_star_state<d>(primL, sL, sM) - qL);
+                    flux = compute_flux<d>(primL, eos) + sL * (compute_star_state<d>(primL, sL, sM, eos) - qL);
                 }
                 else if (sM < 0 && sR >= 0)
                 {
-                    flux = compute_flux<d>(primR) + sR * (compute_star_state<d>(primR, sR, sM) - qR);
+                    flux = compute_flux<d>(primR, eos) + sR * (compute_star_state<d>(primR, sR, sM, eos) - qR);
                 }
                 else if (sR < 0)
                 {
-                    flux = compute_flux<d>(primR);
+                    flux = compute_flux<d>(primR, eos);
                 }
             };
         });

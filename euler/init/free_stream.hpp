@@ -3,10 +3,9 @@
 
 #pragma once
 
-#include <samurai/bc.hpp>
 #include <samurai/box.hpp>
 
-#include "../user_bc.hpp"
+#include "../bc.hpp"
 #include "../variables.hpp"
 #include "registry.hpp"
 
@@ -28,37 +27,47 @@
 
 namespace test_case::free_stream
 {
-    inline const PrimState<2> uniform_state{
-        1.,                                                     // density
-        1.,                                                     // pressure
-        xt::xtensor_fixed<double, xt::xshape<2>>{1., 1.}        // velocity (non-zero on purpose)
-    };
+    inline constexpr double rho = 1.; // density
+    inline constexpr double p   = 1.; // pressure
+    inline constexpr double v   = 1.; // velocity, same on every axis (non-zero on purpose)
 
-    auto init_fn = [](auto& u, auto& cell)
+    template <std::size_t dim>
+    auto uniform_state()
     {
-        u[cell] = prim2cons<2>(uniform_state);
-    };
+        PrimState<dim> state{rho, p, {}};
+        state.v.fill(v);
+        return state;
+    }
 
-    void bc_fn(auto& u, double /*t*/)
+    template <class Field>
+    void init_fn(Field& u, const typename Field::cell_t& cell, const EOS::IdealGas& eos)
+    {
+        u[cell] = prim2cons<Field::dim>(uniform_state<Field::dim>(), eos);
+    }
+
+    template <class Field>
+    void bc_fn(Field& u, double& /*t*/, const EOS::IdealGas& eos)
     {
         // Impose the exact uniform state on every boundary.
-        auto cons = prim2cons<2>(uniform_state);
-        using EulerConsVar = EulerLayout<2>;
-        samurai::make_bc<Imposed>(u,
-                                  cons[EulerConsVar::rho],
-                                  cons[EulerConsVar::rhoE],
-                                  cons[EulerConsVar::mom(0)],
-                                  cons[EulerConsVar::mom(1)]);
+        bc::imposed(u, uniform_state<Field::dim>(), eos);
     }
 
     template <std::size_t dim>
     auto box_fn()
     {
-        xt::xtensor_fixed<double, xt::xshape<dim>> min_corner = {0., 0.};
-        xt::xtensor_fixed<double, xt::xshape<dim>> max_corner = {1., 1.};
+        xt::xtensor_fixed<double, xt::xshape<dim>> min_corner;
+        xt::xtensor_fixed<double, xt::xshape<dim>> max_corner;
+        min_corner.fill(0.);
+        max_corner.fill(1.);
 
         return samurai::Box<double, dim>(min_corner, max_corner);
     }
-}
 
-REGISTER_TEST_CASE(free_stream, test_case::free_stream::box_fn, test_case::free_stream::init_fn, test_case::free_stream::bc_fn)
+    template <class Field>
+    void register_me()
+    {
+        test_case::register_test_case<Field>(
+            "free_stream",
+            {.box = &box_fn<Field::dim>, .init = &init_fn<Field>, .bc = &bc_fn<Field>, .eos = EOS::ideal_gas(1.4)});
+    }
+}

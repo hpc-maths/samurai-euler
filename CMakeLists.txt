@@ -27,3 +27,6 @@ target_link_libraries(euler_user_pred_1d PRIVATE samurai::samurai common_defs)
 
 add_executable(euler_2d main_2d.cpp)
 target_link_libraries(euler_2d PRIVATE samurai::samurai common_defs)
+
+add_executable(euler_3d main_3d.cpp)
+target_link_libraries(euler_3d PRIVATE samurai::samurai common_defs)

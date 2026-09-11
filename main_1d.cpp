@@ -10,6 +10,7 @@
 #include <samurai/mr/mesh.hpp>
 #include <samurai/samurai.hpp>
 
+#include "euler/eos.hpp"
 #include "euler/schemes.hpp"
 #include "euler/utils.hpp"
 #include "euler/variables.hpp"
@@ -22,7 +23,7 @@ double rhoR = 1.;
 double pR   = 0.4;
 double vR   = 2.;
 
-void init(auto& u)
+void init(auto& u, const auto& eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
     using EulerConsVar               = EulerLayout<dim>;
@@ -30,7 +31,7 @@ void init(auto& u)
     auto& mesh = u.mesh();
 
     u.resize();
-    auto set_conserved = [](auto&& u, double rho, double p, double v)
+    auto set_conserved = [&eos](auto&& u, double rho, double p, double v)
     {
         u[EulerConsVar::rho] = rho;
         double norm2         = 0.;
@@ -39,7 +40,7 @@ void init(auto& u)
             u[EulerConsVar::mom(d)] = rho * v;
             norm2 += v * v;
         }
-        u[EulerConsVar::rhoE] = rho * (EOS::stiffened_gas::e(rho, p) + 0.5 * norm2);
+        u[EulerConsVar::rhoE] = rho * (eos.e(rho, p) + 0.5 * norm2);
     };
 
     samurai::for_each_cell(mesh,
@@ -61,6 +62,8 @@ void init(auto& u)
 int main(int argc, char* argv[])
 {
     constexpr std::size_t dim = 1;
+
+    const EOS::IdealGas eos = EOS::air;
 
     auto& app = samurai::initialize("Euler equations solver", argc, argv);
 
@@ -95,8 +98,8 @@ int main(int argc, char* argv[])
 
     SAMURAI_PARSE(argc, argv);
 
-    std::cout <<  "Samurai version: " << SAMURAI_VERSION << std::endl;   // Print Samurai version info
-    
+    std::cout << "Samurai version: " << SAMURAI_VERSION << std::endl; // Print Samurai version info
+
     // Initialize the mesh
     const samurai::Box<double, dim> box(min_corner, max_corner);
     auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(2).disable_minimal_ghost_width();
@@ -108,7 +111,7 @@ int main(int argc, char* argv[])
     if (restart_file.empty())
     {
         mesh = samurai::mra::make_mesh(box, config);
-        init(u);
+        init(u, eos);
     }
     else
     {
@@ -120,8 +123,8 @@ int main(int argc, char* argv[])
     const xt::xtensor_fixed<int, xt::xshape<1>> left  = {-1};
     const xt::xtensor_fixed<int, xt::xshape<1>> right = {1};
 
-    samurai::make_bc<samurai::Dirichlet<1>>(u, rhoL, rhoL * (EOS::stiffened_gas::e(rhoL, pL) + 0.5 * vL * vL), rhoL * vL)->on(left);
-    samurai::make_bc<samurai::Dirichlet<1>>(u, rhoR, rhoR * (EOS::stiffened_gas::e(rhoR, pR) + 0.5 * vR * vR), rhoR * vR)->on(right);
+    samurai::make_bc<samurai::Dirichlet<1>>(u, rhoL, rhoL * (eos.e(rhoL, pL) + 0.5 * vL * vL), rhoL * vL)->on(left);
+    samurai::make_bc<samurai::Dirichlet<1>>(u, rhoR, rhoR * (eos.e(rhoR, pR) + 0.5 * vR * vR), rhoR * vR)->on(right);
 
     auto unp1 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
 
@@ -133,7 +136,7 @@ int main(int argc, char* argv[])
     samurai::save("results", fmt::format("{}_{}_init", filename, scheme), mesh, u);
 
     std::cout << "Using scheme: " << scheme << std::endl;
-    auto fv_scheme = get_fv_scheme<decltype(u)>(scheme);
+    auto fv_scheme = get_fv_scheme<decltype(u)>(scheme, eos);
 
     auto MRadaptation = samurai::make_MRAdapt(u);
     auto mra_config   = samurai::mra_config().relative_detail(true);
@@ -142,7 +145,7 @@ int main(int argc, char* argv[])
     {
         MRadaptation(mra_config);
 
-        double dt = cfl * dx / get_max_lambda(u);
+        double dt = cfl * dx / get_max_lambda(u, eos);
         t += dt;
 
         if (std::isnan(t))

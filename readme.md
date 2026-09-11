@@ -72,14 +72,20 @@ The `euler_2d` executable accepts several command-line arguments to control the 
 
 ### Simulation Parameters
 
-| Option           | Description                                     | Default                  |
-| :--------------- | :---------------------------------------------- | :----------------------- |
-| `--cfl`          | The CFL number                                  | `0.9`                    |
-| `--Ti`           | Initial time                                    | `0.0`                    |
-| `--Tf`           | Final time                                      | `0.25`                   |
-| `--scheme`       | Finite volume scheme (`rusanov`, `hll`, `hllc`) | `hllc`                   |
-| `--test-case`    | Test case to run                                | `double_mach_reflection` |
-| `--restart-file` | Path to a file to restart the simulation from   | (empty)                  |
+| Option               | Description                                                     | Default                  |
+| :------------------- | :-------------------------------------------------------------- | :----------------------- |
+| `--cfl`              | The CFL number                                                   | `0.4`                    |
+| `--Ti`               | Initial time                                                     | `0.0`                    |
+| `--Tf`               | Final time                                                       | `0.25`                   |
+| `--scheme`           | Finite volume scheme (`rusanov`, `hll`, `hllc`)                  | `hllc`                   |
+| `--test-case`        | Test case to run                                                 | `double_mach_reflection` |
+| `--gamma`            | Ratio of specific heats; overrides the value of the test case    | (test case)              |
+| `--restart-file`     | Path to a file to restart the simulation from                    | (empty)                  |
+| `--check-positivity` | Check positivity of density and pressure at each iteration       | off                      |
+
+Run `./euler_2d --help` for the list of available test cases: it is read from
+the registry, so it always matches what the binary actually supports. `euler_3d`
+accepts the same options and exposes the cases that are defined in 3D.
 
 ### Multiresolution Parameters
 
@@ -90,10 +96,11 @@ The `euler_2d` executable accepts several command-line arguments to control the 
 
 ### Output Parameters
 
-| Option     | Description                        | Default           |
-| :--------- | :--------------------------------- | :---------------- |
-| `--path`   | Output directory path              | Current directory |
-| `--nfiles` | Number of output files to generate | `1`               |
+| Option       | Description                        | Default                  |
+| :----------- | :--------------------------------- | :----------------------- |
+| `--path`     | Output directory path              | `results`                |
+| `--filename` | Output file name prefix            | `<test-case>_<scheme>`   |
+| `--nfiles`   | Number of output files to generate | `1`                      |
 
 ### Example Usage
 
@@ -108,3 +115,24 @@ Run with adaptive mesh refinement (levels 5 to 10):
 ```bash
 ./euler_2d --min-level 5 --max-level 10
 ```
+
+Run a case with a different gas, writing somewhere else:
+
+```bash
+./euler_2d --test-case sedov_blast --gamma 1.6666667 --path out --filename sedov_g53
+```
+
+## Adding a test case
+
+A test case is a domain, an initial state, a set of boundary conditions and the
+gas it is written for. Add a header in `euler/init/`, expose `register_me()`, and
+list it in `register_all()` in `euler/init/cases.hpp`. Cases whose definition
+does not depend on the dimension (`free_stream`, `sedov_blast`) are templated on
+the field and serve both `euler_2d` and `euler_3d`; the others register for 2D
+only. The boundary conditions the cases need — outflow, solid wall, an imposed
+state — are in `euler/bc.hpp` and work in any dimension.
+
+Give the case the gas it was written for through its `eos` field: monofluid
+cases use `EOS::ideal_gas(gamma)`. `euler/eos.hpp` also defines a stiffened gas
+for a future two-phase model; the solver is templated on the state law, so the
+monofluid path does not pay for the coefficients it never uses.

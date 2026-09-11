@@ -8,7 +8,7 @@
 
 #include "variables.hpp"
 
-void save(const std::string& path, const std::string& filename, const auto& field)
+void save(const std::string& path, const std::string& filename, const auto& field, const auto& eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(field)>::dim;
     auto& mesh                       = field.mesh();
@@ -19,7 +19,7 @@ void save(const std::string& path, const std::string& filename, const auto& fiel
     samurai::for_each_cell(mesh,
                            [&](auto& cell)
                            {
-                               auto prim      = cons2prim<dim>(field[cell]);
+                               auto prim      = cons2prim<dim>(field[cell], eos);
                                rho[cell]      = prim.rho;
                                pressure[cell] = prim.p;
                                for (std::size_t d = 0; d < dim; ++d)

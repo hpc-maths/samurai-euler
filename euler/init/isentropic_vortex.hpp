@@ -6,10 +6,9 @@
 #include <cmath>
 #include <numbers>
 
-#include <samurai/bc.hpp>
 #include <samurai/box.hpp>
 
-#include "../user_bc.hpp"
+#include "../bc.hpp"
 #include "../variables.hpp"
 #include "registry.hpp"
 
@@ -32,36 +31,48 @@
 //  "Shu" row of Table 1, in the paper's (sound-speed) non-dimensionalization:
 //  rho_inf = 1, a_inf = 1, T_inf = 1, R_gas = 1, so p_inf = 1/gamma.
 //
+//  Everything that depends on gamma is derived from the equation of state, so
+//  the exact solution stays exact if `--gamma` is changed. Note that the Python
+//  post-processing (python/error_analysis.py) assumes gamma = 1.4.
+//
 //  Periodicity is emulated by imposing the exact (time-dependent) solution at the
 //  boundaries, so no change to the mesh / BC framework is required.
 // =============================================================================
 
 namespace test_case::isentropic_vortex
 {
+    using field_t = config<2>::field_t;
     using std::numbers::pi;
 
-    inline const double gamma = EOS::stiffened_gas::gamma;       // ratio of specific heats (eq. 18-19)
-
     // --- "Shu" parameter row of Table 1 ------------------------------------
-    inline const double     alpha   = pi / 4.;                   // angle of attack (mean-flow direction)
-    inline const double     M_inf   = std::sqrt(2. / gamma);     // free-stream Mach number
-    inline constexpr double rho_inf = 1.;                        // free-stream density
-    inline constexpr double R       = 1.;                        // characteristic length scale (eq. 21)
-    inline constexpr double sigma   = 1.;                        // Gaussian standard deviation (eq. 21)
-    inline const double     beta    = M_inf * 5. * std::sqrt(2.) / (4. * pi) * std::exp(0.5); // vortex strength (eq. 20)
-    inline constexpr double L       = 5.;                        // half domain length: domain [-L, L]^2 (sec. IV.A.2)
-    inline constexpr double x0      = 0.;                        // initial vortex center x (eq. 24)
-    inline constexpr double y0      = 0.;                        // initial vortex center y (eq. 24)
+    inline const double alpha       = pi / 4.; // angle of attack (mean-flow direction)
+    inline constexpr double rho_inf = 1.;      // free-stream density
+    inline constexpr double R       = 1.;      // characteristic length scale (eq. 21)
+    inline constexpr double sigma   = 1.;      // Gaussian standard deviation (eq. 21)
+    inline constexpr double L       = 5.;      // half domain length: domain [-L, L]^2 (sec. IV.A.2)
+    inline constexpr double x0      = 0.;      // initial vortex center x (eq. 24)
+    inline constexpr double y0      = 0.;      // initial vortex center y (eq. 24)
 
-    // free-stream velocity components (eq. 23): M_inf * (cos alpha, sin alpha)
-    inline const double v_x_inf = M_inf * std::cos(alpha);
-    inline const double v_y_inf = M_inf * std::sin(alpha);
+    // free-stream Mach number (Table 1) and vortex strength (eq. 20)
+    inline double M_inf(const EOS::IdealGas& eos)
+    {
+        return std::sqrt(2. / eos.gamma);
+    }
+
+    inline double beta(const EOS::IdealGas& eos)
+    {
+        return M_inf(eos) * 5. * std::sqrt(2.) / (4. * pi) * std::exp(0.5);
+    }
 
     // Exact primitive state at point (x, y) and time t. Implements eqs. (20)-(24)
     // of the reference paper (periodic, nearest-image evaluation).
-    inline PrimState<2> exact_state(double x, double y, double t)
+    inline PrimState<2> exact_state(double x, double y, double t, const EOS::IdealGas& eos)
     {
         constexpr double domain_length = 2. * L; // periodic length in each direction
+
+        // free-stream velocity components (eq. 23): M_inf * (cos alpha, sin alpha)
+        const double v_x_inf = M_inf(eos) * std::cos(alpha);
+        const double v_y_inf = M_inf(eos) * std::sin(alpha);
 
         // moving vortex center (eq. 24), wrapped into [-L, L]
         const double x_c = x0 + v_x_inf * t;
@@ -74,15 +85,15 @@ namespace test_case::isentropic_vortex
 
         // Gaussian (eqs. 20-21) and perturbations (eq. 22)
         const double f     = -1. / (2. * sigma * sigma) * ((x_bar / R) * (x_bar / R) + (y_bar / R) * (y_bar / R));
-        const double Omega = beta * std::exp(f);
+        const double Omega = beta(eos) * std::exp(f);
 
         const double delta_v_x = -(y_bar / R) * Omega;
         const double delta_v_y = +(x_bar / R) * Omega;
-        const double delta_T   = -(gamma - 1.) / 2. * Omega * Omega;
+        const double delta_T   = -(eos.gamma - 1.) / 2. * Omega * Omega;
 
         // initial primitive variables (eq. 23), with the isentropic relations
-        const double rho = rho_inf * std::pow(1. + delta_T, 1. / (gamma - 1.));
-        const double p   = 1. / gamma * std::pow(1. + delta_T, gamma / (gamma - 1.));
+        const double rho = rho_inf * std::pow(1. + delta_T, 1. / (eos.gamma - 1.));
+        const double p   = 1. / eos.gamma * std::pow(1. + delta_T, eos.gamma / (eos.gamma - 1.));
         const double v_x = v_x_inf + delta_v_x;
         const double v_y = v_y_inf + delta_v_y;
 
@@ -93,25 +104,29 @@ namespace test_case::isentropic_vortex
         };
     }
 
-    auto init_fn = [](auto& u, auto& cell)
+    inline void init_fn(field_t& u, const typename field_t::cell_t& cell, const EOS::IdealGas& eos)
     {
-        auto x  = cell.center();
-        u[cell] = prim2cons<2>(exact_state(x[0], x[1], 0.));
-    };
+        const auto x = cell.center();
+        u[cell]      = prim2cons<2>(exact_state(x[0], x[1], 0., eos), eos);
+    }
 
-    void bc_fn(auto& u, double& t)
+    inline void bc_fn(field_t& u, double& t, const EOS::IdealGas& eos)
     {
         // Impose the exact (time-dependent) solution on every boundary.
-        auto exact_bc = [&t](const auto&, const auto& cell, const auto&)
+        // `t` is the simulation time, captured by reference on purpose: it must
+        // be the current one every time the boundary is applied.
+        auto exact_bc = [&t, eos](const auto&, const auto& cell, const auto&)
         {
-            auto x = cell.center();
-            return prim2cons<2>(exact_state(x[0], x[1], t));
+            const auto x = cell.center();
+            return prim2cons<2>(exact_state(x[0], x[1], t, eos), eos);
         };
 
-        for (const auto& dir : {xt::xtensor_fixed<int, xt::xshape<2>>{-1, 0},
-                                xt::xtensor_fixed<int, xt::xshape<2>>{1, 0},
-                                xt::xtensor_fixed<int, xt::xshape<2>>{0, -1},
-                                xt::xtensor_fixed<int, xt::xshape<2>>{0, 1}})
+        for (const auto& dir : {
+                 xt::xtensor_fixed<int, xt::xshape<2>>{-1, 0 },
+                 xt::xtensor_fixed<int, xt::xshape<2>>{1,  0 },
+                 xt::xtensor_fixed<int, xt::xshape<2>>{0,  -1},
+                 xt::xtensor_fixed<int, xt::xshape<2>>{0,  1 }
+        })
         {
             samurai::make_bc<Imposed>(u, exact_bc)->on(dir);
         }
@@ -125,9 +140,10 @@ namespace test_case::isentropic_vortex
 
         return samurai::Box<double, dim>(min_corner, max_corner);
     }
-}
 
-REGISTER_TEST_CASE(isentropic_vortex,
-                   test_case::isentropic_vortex::box_fn,
-                   test_case::isentropic_vortex::init_fn,
-                   test_case::isentropic_vortex::bc_fn)
+    inline void register_me()
+    {
+        test_case::register_test_case<field_t>("isentropic_vortex",
+                                               {.box = &box_fn<2>, .init = &init_fn, .bc = &bc_fn, .eos = EOS::ideal_gas(1.4)});
+    }
+}
