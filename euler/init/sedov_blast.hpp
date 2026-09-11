@@ -32,16 +32,46 @@ namespace test_case::sedov_blast
     inline constexpr double p_ambient   = 1e-5; // ambient pressure (very small)
     inline constexpr double r_blast     = 0.1;  // blast radius
 
-    // Blast energy, per dimension: chosen so that the shock sits at a comparable
-    // radius at a comparable time in 2D and 3D.
+    // Blast energy. These are the values that put the shock at r = 1 at t = 1 for
+    // gamma = 1.4 in the Kamm & Timmes verification suite (planar 0.0673185,
+    // spherical 0.851072; the same spherical value is used by clawpack and by
+    // lanl/HARD).
+    //
+    // NOTE the two-dimensional value below is NOT that suite's cylindrical one,
+    // which is 0.311357. It predates this file and is left as it was, since
+    // changing it changes results; worth settling separately.
     template <std::size_t dim>
-    inline constexpr double E_blast = (dim == 2) ? 0.244816 : 0.851072;
+    constexpr double blast_energy()
+    {
+        static_assert(dim >= 1 && dim <= 3, "no blast energy tabulated for this dimension");
 
-    // Volume of the ball of radius r_blast: a disk in 2D, a ball in 3D.
+        if constexpr (dim == 1)
+        {
+            return 0.0673185;
+        }
+        else if constexpr (dim == 2)
+        {
+            return 0.244816;
+        }
+        else
+        {
+            return 0.851072;
+        }
+    }
+
+    // Measure of the region the energy is deposited in: a segment in 1D, a disk
+    // in 2D, a ball in 3D. Spelled out for every dimension rather than left to a
+    // trailing else, which would silently hand a new dimension the 3D answer.
     template <std::size_t dim>
     constexpr double blast_volume()
     {
-        if constexpr (dim == 2)
+        static_assert(dim >= 1 && dim <= 3, "no blast volume for this dimension");
+
+        if constexpr (dim == 1)
+        {
+            return 2. * r_blast;
+        }
+        else if constexpr (dim == 2)
         {
             return std::numbers::pi * r_blast * r_blast;
         }
@@ -66,8 +96,8 @@ namespace test_case::sedov_blast
             r2 += x[d] * x[d];
         }
 
-        const double p = (r2 < r_blast * r_blast) ? (eos.gamma - 1.0) * E_blast<dim> / blast_volume<dim>() // blast zone
-                                                  : p_ambient;                                             // ambient zone
+        const double p = (r2 < r_blast * r_blast) ? (eos.gamma - 1.0) * blast_energy<dim>() / blast_volume<dim>() // blast zone
+                                                  : p_ambient;                                                    // ambient zone
 
         u[cell][EulerConsVar::rho]  = rho_ambient;
         u[cell][EulerConsVar::rhoE] = rho_ambient * eos.e(rho_ambient, p);
@@ -101,4 +131,4 @@ namespace test_case::sedov_blast
     }
 }
 
-REGISTER_TEST_CASE(sedov_blast, test_case::sedov_blast, 2, 3)
+REGISTER_TEST_CASE(sedov_blast, test_case::sedov_blast, 1, 2, 3)

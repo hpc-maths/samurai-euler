@@ -9,6 +9,7 @@
 // own header.
 
 #include "double_mach.hpp"
+#include "double_rarefaction.hpp"
 #include "free_stream.hpp"
 #include "isentropic_vortex.hpp"
 #include "kelvin_helmholtz.hpp"
