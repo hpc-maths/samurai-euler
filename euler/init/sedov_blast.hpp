@@ -101,4 +101,4 @@ namespace test_case::sedov_blast
     }
 }
 
-REGISTER_TEST_CASE_2D_3D(sedov_blast, test_case::sedov_blast)
+REGISTER_TEST_CASE(sedov_blast, test_case::sedov_blast, 2, 3)

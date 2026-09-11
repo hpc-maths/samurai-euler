@@ -34,11 +34,11 @@
 //  a two-phase model would instantiate its own registry on StiffenedGas.
 //
 //  A test case header is self-sufficient: it exposes `definition<Field>()` and
-//  registers itself with one of the macros at the bottom of this file, so adding
+//  registers itself with the macro at the bottom of this file, so adding
 //  a case means adding one file and one #include to cases.hpp, never editing a
-//  list somewhere else. Self-registration needs a concrete field type, which is
-//  why the dimension is spelled out in the macro name: a case written dimension
-//  agnostically uses REGISTER_TEST_CASE_2D_3D and is then available to both
+//  list somewhere else. Self-registration needs a concrete field type, so the
+//  case states the dimensions it is written for as the trailing arguments of the
+//  macro; a dimension agnostic one passes 2 and 3 and is available to both
 //  binaries. The unused instantiation that costs euler_2d measures at about a
 //  second of compile time, which is not a reason to give the property up.
 // =============================================================================
@@ -113,30 +113,36 @@ namespace test_case
         std::map<std::string, test_case_t> test_cases_;
     };
 
-    // Registering by constructing an object lets a test case header add itself to
-    // the registry before main() runs. The registry is a function-local static,
-    // so it is built on first use and the order of these objects across headers
-    // does not matter.
-    template <class Field, class Eos = EOS::IdealGas>
-    struct Registrar
+    // Registers the case under `name` for each of the dimensions given.
+    // Self-registration has to name a concrete field type, so the dimensions are
+    // compile-time values; `make` hands back the definition for whichever field
+    // type it is asked for, which is what lets one call serve several of them.
+    template <std::size_t... Dims, class MakeDefinition>
+    bool register_for_dims(const std::string& name, MakeDefinition make)
     {
-        Registrar(const std::string& name, TestCase<Field, Eos> test_case)
-        {
-            TestCaseRegistry<Field, Eos>::instance().register_test_case(name, std::move(test_case));
-        }
-    };
+        (TestCaseRegistry<typename config<Dims>::field_t>::instance().register_test_case(
+             name,
+             make.template operator()<typename config<Dims>::field_t>()),
+         ...);
+        return true;
+    }
 }
 
+// Put this at the bottom of a test case header:
+//
+//     REGISTER_TEST_CASE(sedov_blast, test_case::sedov_blast, 2, 3)
+//     REGISTER_TEST_CASE(sod, test_case::sod, 2)
+//
 // NAME is the string `--test-case` accepts, NS the namespace holding the case's
-// `definition<Field>()`. Use one of these at the bottom of the case header.
-#define REGISTER_TEST_CASE_FOR_DIM(NAME, NS, DIM)                                                                                      \
-    namespace                                                                                                                          \
-    {                                                                                                                                  \
-        const ::test_case::Registrar<config<DIM>::field_t> registrar_##NAME##_##DIM##d{#NAME, NS::definition<config<DIM>::field_t>()}; \
+// `definition<Field>()`, and the rest is the list of dimensions the case is
+// written for. The list is passed as trailing arguments rather than as `{2, 3}`
+// because braces do not protect commas from macro argument splitting.
+#define REGISTER_TEST_CASE(NAME, NS, ...)                                                                              \
+    namespace                                                                                                          \
+    {                                                                                                                  \
+        const bool registered_##NAME = ::test_case::register_for_dims<__VA_ARGS__>(#NAME,                              \
+                                                                                   []<class Field>()                   \
+                                                                                   {                                   \
+                                                                                       return NS::definition<Field>(); \
+                                                                                   });                                 \
     }
-
-#define REGISTER_TEST_CASE_2D(NAME, NS) REGISTER_TEST_CASE_FOR_DIM(NAME, NS, 2)
-
-#define REGISTER_TEST_CASE_2D_3D(NAME, NS)  \
-    REGISTER_TEST_CASE_FOR_DIM(NAME, NS, 2) \
-    REGISTER_TEST_CASE_FOR_DIM(NAME, NS, 3)

@@ -70,4 +70,4 @@ namespace test_case::free_stream
     }
 }
 
-REGISTER_TEST_CASE_2D_3D(free_stream, test_case::free_stream)
+REGISTER_TEST_CASE(free_stream, test_case::free_stream, 2, 3)

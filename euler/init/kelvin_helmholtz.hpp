@@ -76,4 +76,4 @@ namespace test_case::kelvin_helmholtz
     }
 }
 
-REGISTER_TEST_CASE_2D(kelvin_helmholtz, test_case::kelvin_helmholtz)
+REGISTER_TEST_CASE(kelvin_helmholtz, test_case::kelvin_helmholtz, 2)

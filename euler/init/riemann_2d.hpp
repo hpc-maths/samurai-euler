@@ -170,6 +170,6 @@ namespace test_case::riemann_2d_config12
     }
 }
 
-REGISTER_TEST_CASE_2D(riemann2d_config3, test_case::riemann_2d_config3)
-REGISTER_TEST_CASE_2D(riemann2d_config4, test_case::riemann_2d_config4)
-REGISTER_TEST_CASE_2D(riemann2d_config12, test_case::riemann_2d_config12)
+REGISTER_TEST_CASE(riemann2d_config3, test_case::riemann_2d_config3, 2)
+REGISTER_TEST_CASE(riemann2d_config4, test_case::riemann_2d_config4, 2)
+REGISTER_TEST_CASE(riemann2d_config12, test_case::riemann_2d_config12, 2)

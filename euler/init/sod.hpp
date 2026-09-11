@@ -82,4 +82,4 @@ namespace test_case::sod
     }
 }
 
-REGISTER_TEST_CASE_2D(sod, test_case::sod)
+REGISTER_TEST_CASE(sod, test_case::sod, 2)

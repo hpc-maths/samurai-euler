@@ -149,4 +149,4 @@ namespace test_case::isentropic_vortex
     }
 }
 
-REGISTER_TEST_CASE_2D(isentropic_vortex, test_case::isentropic_vortex)
+REGISTER_TEST_CASE(isentropic_vortex, test_case::isentropic_vortex, 2)

@@ -128,4 +128,4 @@ namespace test_case::double_mach_reflection
     }
 }
 
-REGISTER_TEST_CASE_2D(double_mach_reflection, test_case::double_mach_reflection)
+REGISTER_TEST_CASE(double_mach_reflection, test_case::double_mach_reflection, 2)
