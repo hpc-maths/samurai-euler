@@ -128,8 +128,8 @@ A test case is a domain, an initial state, a set of boundary conditions and the
 gas it is written for. Add a header in `euler/init/`, expose `register_me()`, and
 list it in `register_all()` in `euler/init/cases.hpp`. Cases whose definition
 does not depend on the dimension (`free_stream`, `sedov_blast`) are templated on
-the field and serve both `euler_2d` and `euler_3d`; the others register for 2D
-only. The boundary conditions the cases need — outflow, solid wall, an imposed
+the field and serve `euler_1d`, `euler_2d` and `euler_3d`; the others register
+for the dimensions they are written for. The boundary conditions the cases need — outflow, solid wall, an imposed
 state — are in `euler/bc.hpp` and work in any dimension.
 
 Give the case the gas it was written for through its `eos` field: monofluid
