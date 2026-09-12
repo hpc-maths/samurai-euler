@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <samurai/algorithm/update.hpp>
+#include <samurai/bc.hpp>
 #include <samurai/field.hpp>
 #include <samurai/io/hdf5.hpp>
 #include <samurai/io/restart.hpp>
@@ -16,46 +17,49 @@
 #include "euler/config.hpp"
 #include "euler/eos.hpp"
 #include "euler/init/cases.hpp"
+#include "euler/limiter.hpp"
 #include "euler/prediction.hpp"
 #include "euler/save.hpp"
 #include "euler/schemes.hpp"
 #include "euler/utils.hpp"
 #include "euler/variables.hpp"
 
-template <class Field>
-void init_bc(Field& u, double& t, const std::string& test_case_name, auto eos)
-{
-    auto& registry  = test_case::TestCaseRegistry<Field>::instance();
-    auto& test_case = registry.get(test_case_name);
-    test_case.bc(u, t, eos);
-}
-
-template <class Field>
-void init_sol(Field& u, auto& config, int jump, auto& mra_config, const std::string& test_case_name, auto eos)
+// Refine an MR-adapted field from a coarse mesh up to the target level.
+//
+// Starting the multiresolution from a coarse mesh and refining step by step is
+// cheaper than initializing everything at the finest level. At each step the
+// mesh is uniformly refined by one level, the solution is re-initialized on it
+// and the MR adaptation coarsens back where the details are small.
+template <class Field, class PredFn>
+void init_sol(Field& u, auto& config, int jump, auto& mra_config, PredFn&& prediction_fn, const std::string& test_case_name, auto eos)
 {
     samurai::ScopedTimer timer("initialization");
     static constexpr std::size_t dim = Field::dim;
     using mesh_t                     = typename Field::mesh_t;
     using cl_type                    = typename mesh_t::cl_type;
 
-    auto& registry  = test_case::TestCaseRegistry<Field>::instance();
-    auto& test_case = registry.get(test_case_name);
+    const auto& test_case = test_case::TestCaseRegistry<Field>::instance().get(test_case_name);
 
     auto& mesh = u.mesh();
-    u.resize();
-    samurai::for_each_cell(mesh,
-                           [&](auto& cell)
-                           {
-                               test_case.init(u, cell, eos);
-                           });
+
+    auto init = [&]()
+    {
+        u.resize();
+        samurai::for_each_cell(mesh,
+                               [&](auto& cell)
+                               {
+                                   test_case.init(u, cell, eos);
+                               });
+    };
+
+    init();
 
     std::cout << "Refining to level " << mesh.max_level() << std::endl;
-    // NOTE this deliberately uses the DEFAULT prediction, not the positivity
-    // preserving one used in the time loop. main_3d.cpp does the opposite and
-    // says so explicitly. Left as is so that this commit changes no result;
-    // to be reconciled in lot 1.
-    auto MRadaptation = samurai::make_MRAdapt(u);
+    // Same positivity-preserving prediction as the time loop, so the initial
+    // adapted state is admissible for the very first time-step computation.
+    auto MRadaptation = samurai::make_MRAdapt(prediction_fn, u);
     MRadaptation(mra_config);
+    limit_positivity(u, eos);
 
     while (jump > 0)
     {
@@ -77,32 +81,28 @@ void init_sol(Field& u, auto& config, int jump, auto& mra_config, const std::str
         mesh = {cl, config};
 
         std::cout << "Refining to level " << mesh.max_level() << std::endl;
-        u.resize();
-        samurai::for_each_cell(mesh,
-                               [&](auto& cell)
-                               {
-                                   test_case.init(u, cell, eos);
-                               });
+        init();
         MRadaptation(mra_config);
+        limit_positivity(u, eos);
         jump--;
     }
 }
 
 int main(int argc, char* argv[])
 {
-    constexpr std::size_t dim = 2;
-    std::size_t default_level = 10;
+    constexpr std::size_t dim = 3;
+    std::size_t default_level = 6;
 
     using field_t = config<dim>::field_t;
 
-    auto& app = samurai::initialize("Euler equations solver (2D)", argc, argv);
+    auto& app = samurai::initialize("Euler equations solver (3D)", argc, argv);
 
-    double Tf  = .25;
+    double Tf  = 0.1;
     double cfl = 0.4;
     double t   = 0.;
     std::string restart_file;
     std::string scheme    = "hllc";
-    std::string test_case = "double_mach_reflection";
+    std::string test_case = "sedov_blast";
     double gamma          = 0.; // only used when --gamma is given
 
     bool check_positivity = false;
@@ -152,7 +152,7 @@ int main(int argc, char* argv[])
     // Initialize the mesh
     auto box = selected.box();
 
-    auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(4).disable_minimal_ghost_width();
+    auto config = samurai::mesh_config<dim>().min_level(2).max_level(6).max_stencil_size(4).disable_minimal_ghost_width();
     config.periodic(selected.periodic);
     config.parse_args();
     config.disable_args_parse();
@@ -186,14 +186,15 @@ int main(int argc, char* argv[])
 
         std::cout << "jump = " << jump << " min-level = " << config.min_level() << " max-level = " << config.max_level() << std::endl;
         mesh = samurai::mra::make_mesh(box, config);
-        init_sol(u, config, jump, mra_config, test_case, eos);
+        init_sol(u, config, jump, mra_config, prediction_fn, test_case, eos);
         std::cout << "Mesh initialized with " << mesh.nb_cells() << " cells." << std::endl;
     }
     else
     {
         samurai::load(restart_file, mesh, u);
     }
-    init_bc(u, t, test_case, eos);
+
+    selected.bc(u, t, eos);
 
     auto unp1 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
 
@@ -237,6 +238,10 @@ int main(int argc, char* argv[])
         unp1 = u - dt * fv_scheme(u);
 
         samurai::swap(u, unp1);
+
+        // Enforce admissibility of the finite-volume update before it feeds the
+        // next time-step computation (sound speed) and mesh adaptation.
+        limit_positivity(u, eos);
 
         t += dt;
 

@@ -3,24 +3,25 @@
 
 #pragma once
 
+#include "eos.hpp"
 #include "schemes/hll.hpp"
 #include "schemes/hllc.hpp"
 #include "schemes/rusanov.hpp"
 
-template <class Field>
-auto get_fv_scheme(const std::string& scheme)
+template <class Field, class Eos>
+auto get_fv_scheme(const std::string& scheme, Eos eos)
 {
     if (scheme == "rusanov")
     {
-        return make_euler_rusanov<Field>();
+        return make_euler_rusanov<Field>(eos);
     }
     else if (scheme == "hll")
     {
-        return make_euler_hll<Field>();
+        return make_euler_hll<Field>(eos);
     }
     else if (scheme == "hllc")
     {
-        return make_euler_hllc<Field>();
+        return make_euler_hllc<Field>(eos);
     }
     else
     {

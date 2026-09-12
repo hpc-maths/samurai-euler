@@ -10,77 +10,37 @@
 #include <samurai/mr/mesh.hpp>
 #include <samurai/samurai.hpp>
 
+#include "euler/config.hpp"
+#include "euler/eos.hpp"
+#include "euler/init/cases.hpp"
+#include "euler/save.hpp"
 #include "euler/schemes.hpp"
 #include "euler/utils.hpp"
 #include "euler/variables.hpp"
-
-double rhoL = 1.;
-double pL   = 0.4;
-double vL   = -2.;
-
-double rhoR = 1.;
-double pR   = 0.4;
-double vR   = 2.;
-
-void init(auto& u)
-{
-    static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
-    using EulerConsVar               = EulerLayout<dim>;
-
-    auto& mesh = u.mesh();
-
-    u.resize();
-    auto set_conserved = [](auto&& u, double rho, double p, double v)
-    {
-        u[EulerConsVar::rho] = rho;
-        double norm2         = 0.;
-        for (std::size_t d = 0; d < dim; ++d)
-        {
-            u[EulerConsVar::mom(d)] = rho * v;
-            norm2 += v * v;
-        }
-        u[EulerConsVar::rhoE] = rho * (EOS::stiffened_gas::e(rho, p) + 0.5 * norm2);
-    };
-
-    samurai::for_each_cell(mesh,
-                           [&](auto& cell)
-                           {
-                               auto x = cell.center();
-
-                               if (x[0] < 0.5)
-                               {
-                                   set_conserved(u[cell], rhoL, pL, vL);
-                               }
-                               else
-                               {
-                                   set_conserved(u[cell], rhoR, pR, vR);
-                               }
-                           });
-}
 
 int main(int argc, char* argv[])
 {
     constexpr std::size_t dim = 1;
 
-    auto& app = samurai::initialize("Euler equations solver", argc, argv);
+    using field_t = config<dim>::field_t;
 
-    // Simulation parameters
-    xt::xtensor_fixed<double, xt::xshape<dim>> min_corner = {0.};
-    xt::xtensor_fixed<double, xt::xshape<dim>> max_corner = {1.};
+    auto& app = samurai::initialize("Euler equations solver (1D)", argc, argv);
 
     double Tf  = .15;
     double cfl = 0.4;
     double t   = 0.;
     std::string restart_file;
-    std::string scheme = "hll";
+    std::string scheme    = "hll";
+    std::string test_case = "double_rarefaction";
+    double gamma          = 0.; // only used when --gamma is given
 
     // Output parameters
-    fs::path path        = fs::current_path();
-    std::string filename = fmt::format("euler_{}d", dim);
-    std::size_t nfiles   = 1;
+    fs::path path = "results";
+    std::string filename;
+    std::size_t nfiles = 1;
 
-    app.add_option("--min-corner", min_corner, "The min corner of the box")->capture_default_str()->group("Simulation parameters");
-    app.add_option("--max-corner", max_corner, "The max corner of the box")->capture_default_str()->group("Simulation parameters");
+    auto available = test_case::TestCaseRegistry<field_t>::instance().available_test_cases();
+
     app.add_option("--cfl", cfl, "The CFL")->capture_default_str()->group("Simulation parameters");
     app.add_option("--Ti", t, "Initial time")->capture_default_str()->group("Simulation parameters");
     app.add_option("--Tf", Tf, "Final time")->capture_default_str()->group("Simulation parameters");
@@ -88,18 +48,38 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->check(CLI::IsMember({"rusanov", "hll", "hllc"}))
         ->group("Simulation parameters");
+    app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
+    auto* gamma_opt = app.add_option("--gamma", gamma, "Ratio of specific heats (defaults to the value of the test case)")
+                          ->group("Simulation parameters");
     app.add_option("--restart-file", restart_file, "Restart file")->capture_default_str()->group("Simulation parameters");
     app.add_option("--path", path, "Output path")->capture_default_str()->group("Output");
-    app.add_option("--filename", filename, "File name prefix")->capture_default_str()->group("Output");
+    app.add_option("--filename", filename, "File name prefix (defaults to <test-case>_<scheme>)")->group("Output");
     app.add_option("--nfiles", nfiles, "Number of output files")->capture_default_str()->group("Output");
 
     SAMURAI_PARSE(argc, argv);
 
-    std::cout <<  "Samurai version: " << SAMURAI_VERSION << std::endl;   // Print Samurai version info
-    
+    std::cout << "Samurai version: " << SAMURAI_VERSION << std::endl; // Print Samurai version info
+
+    const auto& selected = test_case::TestCaseRegistry<field_t>::instance().get(test_case);
+
+    // The test case carries the gas it was designed for; --gamma overrides it.
+    EOS::IdealGas eos = selected.eos;
+    if (gamma_opt->count() > 0)
+    {
+        eos.gamma = gamma;
+    }
+    std::cout << "Using gamma = " << eos.gamma << std::endl;
+
+    if (filename.empty())
+    {
+        filename = fmt::format("{}_{}", test_case, scheme);
+    }
+
     // Initialize the mesh
-    const samurai::Box<double, dim> box(min_corner, max_corner);
+    auto box = selected.box();
+
     auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(2).disable_minimal_ghost_width();
+    config.periodic(selected.periodic);
     config.parse_args();
 
     auto mesh = samurai::mra::make_empty_mesh(config);
@@ -108,7 +88,12 @@ int main(int argc, char* argv[])
     if (restart_file.empty())
     {
         mesh = samurai::mra::make_mesh(box, config);
-        init(u);
+        u.resize();
+        samurai::for_each_cell(mesh,
+                               [&](auto& cell)
+                               {
+                                   selected.init(u, cell, eos);
+                               });
     }
     else
     {
@@ -117,11 +102,7 @@ int main(int argc, char* argv[])
 
     std::cout << config.min_level() << " " << config.max_level() << std::endl;
 
-    const xt::xtensor_fixed<int, xt::xshape<1>> left  = {-1};
-    const xt::xtensor_fixed<int, xt::xshape<1>> right = {1};
-
-    samurai::make_bc<samurai::Dirichlet<1>>(u, rhoL, rhoL * (EOS::stiffened_gas::e(rhoL, pL) + 0.5 * vL * vL), rhoL * vL)->on(left);
-    samurai::make_bc<samurai::Dirichlet<1>>(u, rhoR, rhoR * (EOS::stiffened_gas::e(rhoR, pR) + 0.5 * vR * vR), rhoR * vR)->on(right);
+    selected.bc(u, t, eos);
 
     auto unp1 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
 
@@ -130,10 +111,10 @@ int main(int argc, char* argv[])
     std::size_t nsave    = 1;
     std::size_t nt       = 0;
 
-    samurai::save("results", fmt::format("{}_{}_init", filename, scheme), mesh, u);
+    save(path.string(), fmt::format("{}_init", filename), u, eos);
 
     std::cout << "Using scheme: " << scheme << std::endl;
-    auto fv_scheme = get_fv_scheme<decltype(u)>(scheme);
+    auto fv_scheme = get_fv_scheme<decltype(u)>(scheme, eos);
 
     auto MRadaptation = samurai::make_MRAdapt(u);
     auto mra_config   = samurai::mra_config().relative_detail(true);
@@ -142,7 +123,7 @@ int main(int argc, char* argv[])
     {
         MRadaptation(mra_config);
 
-        double dt = cfl * dx / get_max_lambda(u);
+        double dt = cfl * dx / get_max_lambda(u, eos);
         t += dt;
 
         if (std::isnan(t))
@@ -167,7 +148,7 @@ int main(int argc, char* argv[])
         if (t >= static_cast<double>(nsave + 1) * dt_save || t == Tf)
         {
             const std::string suffix = (nfiles != 1) ? fmt::format("_ite_{}", nsave++) : "";
-            samurai::save("results", fmt::format("{}_{}{}", filename, scheme, suffix), mesh, u);
+            save(path.string(), fmt::format("{}{}", filename, suffix), u, eos);
         }
     }
 

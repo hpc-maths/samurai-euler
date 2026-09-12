@@ -3,67 +3,68 @@
 
 #pragma once
 
-#include <numbers>
+#include <array>
 
-#include <samurai/bc.hpp>
+#include <samurai/box.hpp>
 
+#include "../bc.hpp"
 #include "../variables.hpp"
 #include "registry.hpp"
 
-namespace test_case::riemann_2d_config_3
+// =============================================================================
+//  Two-dimensional Riemann problems (four quadrants)
+// -----------------------------------------------------------------------------
+//  The unit square is split into four quadrants, each holding a uniform state.
+//  The nineteen admissible combinations are classified in
+//
+//      P.D. Lax, X.-D. Liu, "Solution of two-dimensional Riemann problems of gas
+//      dynamics by positive schemes", SIAM J. Sci. Comput. 19 (1998) 319-340.
+//
+//  Quadrants are numbered counter-clockwise from the upper right:
+//      q[0] : x >= x0, y >= y0        q[1] : x <  x0, y >= y0
+//      q[2] : x <  x0, y <  y0        q[3] : x >= x0, y <  y0
+//
+//  TODO (lot 2) the interface should sit at x0 = y0 = 0.8, and configuration 3
+//  has p = 0.029 in quadrant 3, not 0.29. Both are corrected in their own commit
+//  so that this one stays behaviour preserving.
+// =============================================================================
+
+namespace test_case::riemann_2d
 {
-    double x0 = 0.5;
-    double y0 = 0.5;
+    using field_t = config<2>::field_t;
 
-    PrimState<2> quad1_state{
-        1.5,
-        1.5,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
-    };
-
-    PrimState<2> quad2_state{
-        0.5323,
-        0.3,
-        xt::xtensor_fixed<double, xt::xshape<2>>{1.206, 0.}
-    };
-
-    PrimState<2> quad3_state{
-        0.138,
-        0.29,
-        xt::xtensor_fixed<double, xt::xshape<2>>{1.206, 1.206}
-    };
-
-    PrimState<2> quad4_state{
-        0.5323,
-        0.3,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0, 1.206}
-    };
-
-    auto init_fn = [](auto& u, auto& cell)
+    struct Config
     {
-        auto x = cell.center();
+        double x0;
+        double y0;
+        std::array<PrimState<2>, 4> q;
+    };
 
-        if (x[0] >= x0 && x[1] >= y0)
+    inline void init_from(const Config& c, field_t& u, const typename field_t::cell_t& cell, EOS::IdealGas eos)
+    {
+        const auto x = cell.center();
+
+        if (x[0] >= c.x0 && x[1] >= c.y0)
         {
-            u[cell] = prim2cons<2>(quad1_state);
+            u[cell] = prim2cons<2>(c.q[0], eos);
         }
-        else if (x[0] < x0 && x[1] >= y0)
+        else if (x[0] < c.x0 && x[1] >= c.y0)
         {
-            u[cell] = prim2cons<2>(quad2_state);
+            u[cell] = prim2cons<2>(c.q[1], eos);
         }
-        else if (x[0] < x0 && x[1] < y0)
+        else if (x[0] < c.x0 && x[1] < c.y0)
         {
-            u[cell] = prim2cons<2>(quad3_state);
+            u[cell] = prim2cons<2>(c.q[2], eos);
         }
         else // (x[0] >= x0 && x[1] < y0)
         {
-            u[cell] = prim2cons<2>(quad4_state);
+            u[cell] = prim2cons<2>(c.q[3], eos);
         }
-    };
+    }
 
-    void bc_fn(auto& u, double /*t*/)
+    inline void bc_fn(field_t& u, double& /*t*/, EOS::IdealGas /*eos*/)
     {
-        samurai::make_bc<samurai::Neumann<1>>(u, 0., 0., 0., 0.);
+        bc::outflow(u);
     }
 
     template <std::size_t dim>
@@ -75,153 +76,100 @@ namespace test_case::riemann_2d_config_3
         return samurai::Box<double, dim>(min_corner, max_corner);
     }
 
+    // --- configuration 3 -----------------------------------------------------
+    inline const Config config_3{
+        0.5,
+        0.5,
+        {PrimState<2>{1.5, 1.5, {0., 0.}},
+          PrimState<2>{0.5323, 0.3, {1.206, 0.}},
+          PrimState<2>{0.138, 0.29, {1.206, 1.206}},
+          PrimState<2>{0.5323, 0.3, {0., 1.206}}}
+    };
+
+    // --- configuration 4 -----------------------------------------------------
+    inline const Config config_4{
+        0.5,
+        0.5,
+        {PrimState<2>{1.1, 1.1, {0., 0.}},
+          PrimState<2>{0.5065, 0.35, {0.8939, 0.}},
+          PrimState<2>{1.1, 1.1, {0.8939, 0.89396}},
+          PrimState<2>{0.5065, 0.35, {0., 0.89396}}}
+    };
+
+    // --- configuration 12 ----------------------------------------------------
+    inline const Config config_12{
+        0.5,
+        0.5,
+        {PrimState<2>{0.5197, 0.4, {0., 0.}},
+          PrimState<2>{1., 1., {-0.6259, 0.}},
+          PrimState<2>{0.8, 1., {-0.6259, -0.6259}},
+          PrimState<2>{1., 1., {0., -0.6259}}}
+    };
+
+    // One definition per configuration; `--riemann-config` will replace these
+    // three entries by a single parameterised case once the constants are fixed.
+    template <class Field, const Config& c>
+    test_case::TestCase<Field> definition_for()
+    {
+        static_assert(Field::dim == 2, "this test case is two-dimensional");
+        return {.box = &box_fn<2>,
+                .init =
+                    [](Field& u, const typename Field::cell_t& cell, EOS::IdealGas eos)
+                {
+                    init_from(c, u, cell, eos);
+                },
+                .bc  = &bc_fn,
+                .eos = EOS::ideal_gas(1.4)};
+    }
+
+    template <class Field>
+    test_case::TestCase<Field> definition_config3()
+    {
+        return definition_for<Field, config_3>();
+    }
+
+    template <class Field>
+    test_case::TestCase<Field> definition_config4()
+    {
+        return definition_for<Field, config_4>();
+    }
+
+    template <class Field>
+    test_case::TestCase<Field> definition_config12()
+    {
+        return definition_for<Field, config_12>();
+    }
 }
 
-REGISTER_TEST_CASE(riemann2d_config3,
-                   test_case::riemann_2d_config_3::box_fn,
-                   test_case::riemann_2d_config_3::init_fn,
-                   test_case::riemann_2d_config_3::bc_fn)
-
-namespace test_case::riemann_2d_config_4
+// The macro expects a `definition` in the namespace it is given, so each
+// configuration gets a thin namespace of its own.
+namespace test_case::riemann_2d_config3
 {
-    double x0 = 0.5;
-    double y0 = 0.5;
-
-    PrimState<2> quad1_state{
-        1.1,
-        1.1,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
-    };
-
-    PrimState<2> quad2_state{
-        0.5065,
-        0.35,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0.8939, 0.}
-    };
-
-    PrimState<2> quad3_state{
-        1.1,
-        1.1,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0.8939, 0.89396}
-    };
-
-    PrimState<2> quad4_state{
-        0.5065,
-        0.35,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0, 0.89396}
-    };
-
-    auto init_fn = [](auto& u, auto& cell)
+    template <class Field>
+    auto definition()
     {
-        auto x = cell.center();
-
-        if (x[0] >= x0 && x[1] >= y0)
-        {
-            u[cell] = prim2cons<2>(quad1_state);
-        }
-        else if (x[0] < x0 && x[1] >= y0)
-        {
-            u[cell] = prim2cons<2>(quad2_state);
-        }
-        else if (x[0] < x0 && x[1] < y0)
-        {
-            u[cell] = prim2cons<2>(quad3_state);
-        }
-        else // (x[0] >= x0 && x[1] < y0)
-        {
-            u[cell] = prim2cons<2>(quad4_state);
-        }
-    };
-
-    void bc_fn(auto& u, double /*t*/)
-    {
-        samurai::make_bc<samurai::Neumann<1>>(u, 0., 0., 0., 0.);
+        return riemann_2d::definition_config3<Field>();
     }
-
-    template <std::size_t dim>
-    auto box_fn()
-    {
-        xt::xtensor_fixed<double, xt::xshape<dim>> min_corner = {0., 0.};
-        xt::xtensor_fixed<double, xt::xshape<dim>> max_corner = {1., 1.};
-
-        return samurai::Box<double, dim>(min_corner, max_corner);
-    }
-
 }
 
-REGISTER_TEST_CASE(riemann2d_config4,
-                   test_case::riemann_2d_config_4::box_fn,
-                   test_case::riemann_2d_config_4::init_fn,
-                   test_case::riemann_2d_config_4::bc_fn)
-
-namespace test_case::riemann_2d_config_12
+namespace test_case::riemann_2d_config4
 {
-    double x0 = 0.5;
-    double y0 = 0.5;
-
-    PrimState<2> quad1_state{
-        0.5197,
-        0.4,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
-    };
-
-    PrimState<2> quad2_state{
-        1,
-        1,
-        xt::xtensor_fixed<double, xt::xshape<2>>{-0.6259, 0.}
-    };
-
-    PrimState<2> quad3_state{
-        0.8,
-        1,
-        xt::xtensor_fixed<double, xt::xshape<2>>{-0.6259, -0.6259}
-    };
-
-    PrimState<2> quad4_state{
-        1,
-        1,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0, -0.6259}
-    };
-
-    auto init_fn = [](auto& u, auto& cell)
+    template <class Field>
+    auto definition()
     {
-        auto x = cell.center();
-
-        if (x[0] >= x0 && x[1] >= y0)
-        {
-            u[cell] = prim2cons<2>(quad1_state);
-        }
-        else if (x[0] < x0 && x[1] >= y0)
-        {
-            u[cell] = prim2cons<2>(quad2_state);
-        }
-        else if (x[0] < x0 && x[1] < y0)
-        {
-            u[cell] = prim2cons<2>(quad3_state);
-        }
-        else // (x[0] >= x0 && x[1] < y0)
-        {
-            u[cell] = prim2cons<2>(quad4_state);
-        }
-    };
-
-    void bc_fn(auto& u, double /*t*/)
-    {
-        samurai::make_bc<samurai::Neumann<1>>(u, 0., 0., 0., 0.);
+        return riemann_2d::definition_config4<Field>();
     }
-
-    template <std::size_t dim>
-    auto box_fn()
-    {
-        xt::xtensor_fixed<double, xt::xshape<dim>> min_corner = {0., 0.};
-        xt::xtensor_fixed<double, xt::xshape<dim>> max_corner = {1., 1.};
-
-        return samurai::Box<double, dim>(min_corner, max_corner);
-    }
-
 }
 
-REGISTER_TEST_CASE(riemann2d_config12,
-                   test_case::riemann_2d_config_12::box_fn,
-                   test_case::riemann_2d_config_12::init_fn,
-                   test_case::riemann_2d_config_12::bc_fn)
+namespace test_case::riemann_2d_config12
+{
+    template <class Field>
+    auto definition()
+    {
+        return riemann_2d::definition_config12<Field>();
+    }
+}
+
+REGISTER_TEST_CASE(riemann2d_config3, test_case::riemann_2d_config3, 2)
+REGISTER_TEST_CASE(riemann2d_config4, test_case::riemann_2d_config4, 2)
+REGISTER_TEST_CASE(riemann2d_config12, test_case::riemann_2d_config12, 2)
