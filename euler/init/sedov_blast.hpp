@@ -32,14 +32,10 @@ namespace test_case::sedov_blast
     inline constexpr double p_ambient   = 1e-5; // ambient pressure (very small)
     inline constexpr double r_blast     = 0.1;  // blast radius
 
-    // Blast energy. These are the values that put the shock at r = 1 at t = 1 for
-    // gamma = 1.4 in the Kamm & Timmes verification suite (planar 0.0673185,
-    // spherical 0.851072; the same spherical value is used by clawpack and by
-    // lanl/HARD).
-    //
-    // NOTE the two-dimensional value below is NOT that suite's cylindrical one,
-    // which is 0.311357. It predates this file and is left as it was, since
-    // changing it changes results; worth settling separately.
+    // Blast energy: the value that puts the shock at r = 1 at t = 1 for
+    // gamma = 1.4, one per geometry, from the Kamm & Timmes verification suite
+    // (planar 0.0673185, cylindrical 0.311357, spherical 0.851072; the spherical
+    // value is the one used by clawpack and by lanl/HARD as well).
     template <std::size_t dim>
     constexpr double blast_energy()
     {
@@ -51,7 +47,7 @@ namespace test_case::sedov_blast
         }
         else if constexpr (dim == 2)
         {
-            return 0.244816;
+            return 0.311357;
         }
         else
         {
