@@ -24,9 +24,8 @@
 //      q[0] : x >= x0, y >= y0        q[1] : x <  x0, y >= y0
 //      q[2] : x <  x0, y <  y0        q[3] : x >= x0, y <  y0
 //
-//  TODO (lot 2) the interface should sit at x0 = y0 = 0.8, and configuration 3
-//  has p = 0.029 in quadrant 3, not 0.29. Both are corrected in their own commit
-//  so that this one stays behaviour preserving.
+//  TODO (lot 2) the interface should sit at x0 = y0 = 0.8, not 0.5. Corrected in
+//  its own commit, so that this one stays behaviour preserving.
 // =============================================================================
 
 namespace test_case::riemann_2d
@@ -82,7 +81,7 @@ namespace test_case::riemann_2d
         0.5,
         {PrimState<2>{1.5, 1.5, {0., 0.}},
           PrimState<2>{0.5323, 0.3, {1.206, 0.}},
-          PrimState<2>{0.138, 0.29, {1.206, 1.206}},
+          PrimState<2>{0.138, 0.029, {1.206, 1.206}},
           PrimState<2>{0.5323, 0.3, {0., 1.206}}}
     };
 
