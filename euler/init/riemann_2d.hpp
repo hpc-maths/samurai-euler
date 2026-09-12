@@ -101,10 +101,10 @@ namespace test_case::riemann_2d
     inline const Config config_12{
         0.8,
         0.8,
-        {PrimState<2>{0.5197, 0.4, {0., 0.}},
-          PrimState<2>{1., 1., {-0.6259, 0.}},
-          PrimState<2>{0.8, 1., {-0.6259, -0.6259}},
-          PrimState<2>{1., 1., {0., -0.6259}}}
+        {PrimState<2>{0.5313, 0.4, {0., 0.}},
+          PrimState<2>{1., 1., {0.7276, 0.}},
+          PrimState<2>{0.8, 1., {0., 0.}},
+          PrimState<2>{1., 1., {0., 0.7276}}}
     };
 
     // One definition per configuration; `--riemann-config` will replace these
