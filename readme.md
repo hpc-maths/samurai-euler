@@ -122,6 +122,38 @@ Run a case with a different gas, writing somewhere else:
 ./euler_2d --test-case sedov_blast --gamma 1.6666667 --path out --filename sedov_g53
 ```
 
+## Tests
+
+The suite drives the built binaries as subprocesses, so it checks what a user
+actually runs, command line included.
+
+```bash
+ctest --test-dir build --output-on-failure       # the fast tests, about 30 s
+ctest --test-dir build -L slow                   # the validation runs as well
+```
+
+It has three tiers, and they are not interchangeable.
+
+`test_invariants.py` owns no reference file. It asserts properties that stay
+true when the numerics legitimately change: a uniform flow stays uniform, a
+closed box conserves mass and energy, density and pressure stay positive, the
+Sedov blast keeps its rotational symmetry, a restart reproduces the run. A
+better scheme cannot make these fail, and no amount of regenerating can make
+them pass.
+
+`test_regression.py` compares whole fields against references under
+`tests/reference`. Every case there runs on a **uniform** mesh, on purpose: on
+an adapted mesh a rounding difference of the order of 1e-16 near the
+multiresolution threshold flips a refinement decision, the mesh changes, and the
+comparison fails on another compiler without anything being wrong. Regenerate
+the references with `pytest --generate-ref`, and say in the commit message why
+they moved.
+
+`test_validation.py` is marked slow and asserts on scalars rather than fields,
+which is what makes it usable on an adapted mesh. It measures the convergence
+order of the isentropic vortex against its exact solution, and checks that
+adaptation reaches the same error as a uniform mesh with fewer cells.
+
 ## Adding a test case
 
 A test case is a domain, an initial state, a set of boundary conditions and the
