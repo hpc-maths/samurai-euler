@@ -8,6 +8,7 @@
 // dimensions a case is available in are stated by the macro at the bottom of its
 // own header.
 
+#include "closed_box.hpp"
 #include "double_mach.hpp"
 #include "double_rarefaction.hpp"
 #include "free_stream.hpp"

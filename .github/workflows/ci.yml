@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # The validation runs measure convergence orders and are too slow for every
+    # push, but they are the tests that would notice the scheme losing its order.
+    - cron: "0 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: conda/environment.yml
+          cache-environment: true
+
+      - name: Configure
+        shell: bash -el {0}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: bash -el {0}
+        run: cmake --build build -j $(nproc)
+
+      - name: Test
+        shell: bash -el {0}
+        run: ctest --test-dir build --output-on-failure -LE slow
+
+      - name: Validation
+        if: github.event_name == 'schedule'
+        shell: bash -el {0}
+        run: ctest --test-dir build --output-on-failure -L slow

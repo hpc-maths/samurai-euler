@@ -203,6 +203,9 @@ int main(int argc, char* argv[])
     std::size_t nt       = 0;
 
     save(path.string(), fmt::format("{}_init", filename), u, eos);
+    // The conservative state, which is what --restart-file reloads. save()
+    // writes primitives for post-processing and cannot be read back.
+    samurai::dump(path, fmt::format("{}_restart_init", filename), mesh, u);
 
     std::cout << "Using scheme: " << scheme << std::endl;
     auto fv_scheme = get_fv_scheme<decltype(u)>(scheme, eos);
@@ -244,6 +247,7 @@ int main(int argc, char* argv[])
         {
             const std::string suffix = (nfiles != 1) ? fmt::format("_ite_{}", nsave++) : "";
             save(path.string(), fmt::format("{}{}", filename, suffix), u, eos);
+            samurai::dump(path, fmt::format("{}_restart{}", filename, suffix), mesh, u);
         }
     }
     samurai::times::timers.stop("TimeLoop");

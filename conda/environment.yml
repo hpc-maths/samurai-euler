@@ -11,4 +11,5 @@ dependencies:
   - hdf5 * mpi_*
   - cmake
   - h5py
+  - pytest
   - matplotlib
