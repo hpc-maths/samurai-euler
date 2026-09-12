@@ -23,7 +23,32 @@
 //  up immediately as a broken symmetry.
 //
 //  The definition is dimension agnostic — only the volume over which the energy
-//  is spread changes — so the same case serves euler_2d and euler_3d.
+//  is spread changes — so the same case serves euler_1d, euler_2d and euler_3d.
+//
+//  Reference solution
+//  ------------------
+//      L.I. Sedov, "Similarity and Dimensional Methods in Mechanics", Academic
+//      Press, New York, 1959, chapter IV.
+//      J.R. Kamm, "Evaluation of the Sedov-von Neumann-Taylor Blast Wave
+//      Solution", report LA-UR-00-6055, Los Alamos National Laboratory, 2000.
+//      J.R. Kamm, F.X. Timmes, "On Efficient Generation of Numerically Robust
+//      Sedov Solutions", report LA-UR-07-2849, Los Alamos National Laboratory,
+//      2007.
+//
+//  The similarity solution puts the shock at
+//
+//      r_s(t) = ( E t^2 / (alpha rho_0) )^(1/(nu+2)),
+//
+//  nu = 1, 2, 3 being the geometry and alpha the dimensionless energy of the
+//  solution, a number that depends on nu and gamma alone. Integrating the
+//  similarity equations for gamma = 1.4 gives
+//
+//      alpha = 1.077485 (planar, energy counted on both sides of the plane)
+//              0.984074 (cylindrical)
+//              0.851072 (spherical)
+//
+//  python/sedov_exact.py computes these constants and the radius they give,
+//  and the validation suite measures the computed shock against it.
 // =============================================================================
 
 namespace test_case::sedov_blast
@@ -32,10 +57,18 @@ namespace test_case::sedov_blast
     inline constexpr double p_ambient   = 1e-5; // ambient pressure (very small)
     inline constexpr double r_blast     = 0.1;  // blast radius
 
-    // Blast energy: the value that puts the shock at r = 1 at t = 1 for
-    // gamma = 1.4, one per geometry, from the Kamm & Timmes verification suite
-    // (planar 0.0673185, cylindrical 0.311357, spherical 0.851072; the spherical
-    // value is the one used by clawpack and by lanl/HARD as well).
+    // Blast energy, one per geometry: the standard cases of the Kamm report,
+    // which fix E so that the shock sits at r = 0.5, 0.75 and 1 at t = 1 for
+    // gamma = 1.4 and rho_0 = 1. The spherical value is the one clawpack and
+    // lanl/HARD use as well, and equals alpha, spherical being the geometry
+    // whose shock is normalised to r = 1.
+    //
+    // NOTE the planar energy is Kamm's, and his planar problem releases it on
+    // ONE side of the plane, while the deposit below is symmetric about the
+    // origin. With rho_0 = 1 the 1D shock therefore reaches 0.397 at t = 1
+    // rather than 0.5; matching his planar case exactly would mean depositing
+    // twice this energy. The 2D and 3D cases have no such convention to trip
+    // over and land on 0.75 and 1.
     template <std::size_t dim>
     constexpr double blast_energy()
     {

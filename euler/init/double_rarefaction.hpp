@@ -22,7 +22,15 @@
 //  it fails loudly rather than quietly. It is the initial state euler_1d used
 //  before the test cases were shared, kept here as its default.
 //
-//  Toro, "Riemann Solvers and Numerical Methods for Fluid Dynamics", test 2.
+//  The states are test 2 of Table 4.1 of
+//
+//      E.F. Toro, "Riemann Solvers and Numerical Methods for Fluid Dynamics.
+//      A Practical Introduction", 3rd ed., Springer, 2009,
+//      https://doi.org/10.1007/b79761
+//
+//  whose exact solution python/exact_riemann.py computes: p* = 0.00189,
+//  u* = 0, and a star density of 0.02185 on both sides. That pressure is four
+//  orders of magnitude below the initial one.
 // =============================================================================
 
 namespace test_case::double_rarefaction

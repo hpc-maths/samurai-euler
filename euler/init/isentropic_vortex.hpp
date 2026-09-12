@@ -23,10 +23,19 @@
 //  case the reference for measuring convergence rates; the moving structure also
 //  exercises the mesh adaptation (the refined region must track the vortex).
 //
-//  Notation and formulas follow:
+//  The case goes back to
+//      C.-W. Shu, "Essentially non-oscillatory and weighted essentially
+//      non-oscillatory schemes for hyperbolic conservation laws", in: Advanced
+//      Numerical Approximation of Nonlinear Hyperbolic Equations, Lecture Notes
+//      in Mathematics 1697, Springer, 1998, pp. 325-432,
+//      https://doi.org/10.1007/BFb0096355
+//
+//  but the many variants of it in circulation differ in their scaling, so the
+//  notation and formulas here follow the survey that sorts them out:
 //      S. C. Spiegel, H. T. Huynh, J. R. DeBonis, "A Survey of the Isentropic
 //      Euler Vortex Problem using High-Order Methods", AIAA Paper 2015-2444,
-//      NASA Glenn Research Center, 2015 (NTRS 20150018403).
+//      NASA Glenn Research Center, 2015 (NTRS 20150018403),
+//      https://doi.org/10.2514/6.2015-2444.
 //  Equation/section numbers below refer to that paper. The parameter set is the
 //  "Shu" row of Table 1, in the paper's (sound-speed) non-dimensionalization:
 //  rho_inf = 1, a_inf = 1, T_inf = 1, R_gas = 1, so p_inf = 1/gamma.

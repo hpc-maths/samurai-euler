@@ -13,9 +13,42 @@
 #include "../variables.hpp"
 #include "registry.hpp"
 
-// Kelvin-Helmholtz instability: two horizontal layers in shear. A small
-// vertical-velocity perturbation localized at the two interfaces grows into
-// the characteristic rolled-up billows.
+// =============================================================================
+//  Kelvin-Helmholtz instability
+// -----------------------------------------------------------------------------
+//  Two horizontal layers in shear. A small vertical-velocity perturbation
+//  localized at the two interfaces grows into the characteristic rolled-up
+//  billows.
+//
+//  The layer states, the shear and the seeded perturbation follow the widely
+//  reproduced set-up of
+//
+//      V. Springel, "E pur si muove: Galilean-invariant cosmological
+//      hydrodynamical simulations on a moving mesh", Mon. Not. R. Astron. Soc.
+//      401 (2) (2010) 791-851,
+//      https://doi.org/10.1111/j.1365-2966.2009.15715.x
+//
+//  with two departures from it, which matter as soon as a figure here is
+//  compared to a published one:
+//
+//    - gamma is 1.4 here against 5/3 there, so that the case shares the
+//      equation of state of every other case in this repository;
+//    - the boundaries are outflow rather than periodic, periodicity not being
+//      wired through the mesh configuration yet.
+//
+//  The interface is a discontinuity, which makes the growth of the billows
+//  depend on the resolution rather than converge to one answer:
+//
+//      C.P. McNally, W. Lyra, J.-C. Passy, "A well-posed Kelvin-Helmholtz
+//      instability test and comparison", Astrophys. J. Suppl. Ser. 201 (2)
+//      (2012) 18, https://doi.org/10.1088/0067-0049/201/2/18
+//
+//  So the case is qualitative: it shows the scheme developing the instability
+//  and the adaptation following it. No number should be read off it. What earns
+//  it a place in the non-regression suite is being a moving, structured,
+//  adapted solution.
+// =============================================================================
+
 namespace test_case::kelvin_helmholtz
 {
     using field_t = config<2>::field_t;

@@ -10,6 +10,7 @@ other.
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -118,6 +119,19 @@ def conservative(volume, fields, gamma=1.4):
 def finest_cell_size(volume, dim):
     """Size of the smallest cell, i.e. the resolution the mesh actually reaches."""
     return volume.min() ** (1.0 / dim)
+
+
+def sedov_blast_energy(dim):
+    """The blast energy euler/init/sedov_blast.hpp compiles in, read from it.
+
+    Restating the three numbers here would make a second source of truth that
+    eventually stops agreeing with the first.
+    """
+    text = (ROOT / "euler" / "init" / "sedov_blast.hpp").read_text()
+    body = text.split("constexpr double blast_energy()", 1)[1]
+    values = re.findall(r"return\s+([0-9.eE+-]+);", body)[:3]
+    assert len(values) == 3, f"expected one blast energy per dimension, read {values}"
+    return float(values[dim - 1])
 
 
 def level_count(volume):

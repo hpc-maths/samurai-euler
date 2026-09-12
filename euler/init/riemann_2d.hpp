@@ -18,7 +18,19 @@
 //  The nineteen admissible combinations are classified in
 //
 //      P.D. Lax, X.-D. Liu, "Solution of two-dimensional Riemann problems of gas
-//      dynamics by positive schemes", SIAM J. Sci. Comput. 19 (1998) 319-340.
+//      dynamics by positive schemes", SIAM J. Sci. Comput. 19 (2) (1998)
+//      319-340, https://doi.org/10.1137/S1064827595291819
+//
+//  and are tabulated, with this numbering, in
+//
+//      A. Kurganov, E. Tadmor, "Solution of two-dimensional Riemann problems
+//      for gas dynamics without Riemann problem solvers", Numer. Methods
+//      Partial Differ. Equ. 18 (5) (2002) 584-608,
+//      https://doi.org/10.1002/num.10025
+//
+//  The states registered below are those tables, verbatim; the article this
+//  repository reproduces (eq. 4) takes configuration 3 as its reference case
+//  for performance.
 //
 //  Quadrants are numbered counter-clockwise from the upper right:
 //      q[0] : x >= x0, y >= y0        q[1] : x <  x0, y >= y0
@@ -28,6 +40,11 @@
 //  article this repository reproduces: with t_f = 0.8 the waves then fill
 //  the domain without reaching its boundary, where the outflow condition
 //  would pollute them.
+//
+//  All three configurations below are invariant under the reflection about the
+//  diagonal (x,y,u,v) -> (y,x,v,u), so their solution must be too.
+//  tests/test_validation.py asserts that, and a single mistyped digit in one
+//  quadrant is enough to break it.
 // =============================================================================
 
 namespace test_case::riemann_2d
