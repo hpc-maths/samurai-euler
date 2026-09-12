@@ -63,12 +63,10 @@ namespace test_case::sedov_blast
     // lanl/HARD use as well, and equals alpha, spherical being the geometry
     // whose shock is normalised to r = 1.
     //
-    // NOTE the planar energy is Kamm's, and his planar problem releases it on
-    // ONE side of the plane, while the deposit below is symmetric about the
-    // origin. With rho_0 = 1 the 1D shock therefore reaches 0.397 at t = 1
-    // rather than 0.5; matching his planar case exactly would mean depositing
-    // twice this energy. The 2D and 3D cases have no such convention to trip
-    // over and land on 0.75 and 1.
+    // The planar value is twice Kamm's 0.0673185 because his planar blast
+    // releases its energy on one side of the plane, while the deposit below
+    // straddles the origin and feeds two shocks. Doubling it gives each shock
+    // his energy, and puts both where his solution puts its own, at 0.5.
     template <std::size_t dim>
     constexpr double blast_energy()
     {
@@ -76,7 +74,7 @@ namespace test_case::sedov_blast
 
         if constexpr (dim == 1)
         {
-            return 0.0673185;
+            return 0.134637; // = 2 x 0.0673185, see above
         }
         else if constexpr (dim == 2)
         {
