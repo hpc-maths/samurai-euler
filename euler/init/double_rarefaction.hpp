@@ -47,20 +47,10 @@ namespace test_case::double_rarefaction
         const xt::xtensor_fixed<int, xt::xshape<1>> left  = {-1};
         const xt::xtensor_fixed<int, xt::xshape<1>> right = {1};
 
-        // Dirichlet rather than an imposed ghost state: the rarefactions never
-        // reach the boundaries, so holding the initial state there is exact.
-        using EulerConsVar = EulerLayout<1>;
-
-        const auto cons_left  = prim2cons<1>(left_state, eos);
-        const auto cons_right = prim2cons<1>(right_state, eos);
-
-        samurai::make_bc<samurai::Dirichlet<1>>(u, cons_left[EulerConsVar::rho], cons_left[EulerConsVar::rhoE], cons_left[EulerConsVar::mom(0)])
-            ->on(left);
-        samurai::make_bc<samurai::Dirichlet<1>>(u,
-                                                cons_right[EulerConsVar::rho],
-                                                cons_right[EulerConsVar::rhoE],
-                                                cons_right[EulerConsVar::mom(0)])
-            ->on(right);
+        // Holding the initial state at each end is exact here: the rarefactions
+        // never reach the boundaries.
+        bc::imposed(u, left_state, eos)->on(left);
+        bc::imposed(u, right_state, eos)->on(right);
     }
 
     template <std::size_t dim>

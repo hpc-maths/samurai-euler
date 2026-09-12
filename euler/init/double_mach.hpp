@@ -65,50 +65,46 @@ namespace test_case::double_mach_reflection
         const xt::xtensor_fixed<int, xt::xshape<dim>> left   = {-1, 0};
 
         // Bottom: post-shock state upstream of the ramp foot, reflecting wall
-        // downstream of it.
-        samurai::make_bc<Imposed>(u,
-                                  [&u, eos](const auto&, const auto& cell, const auto&)
-                                  {
-                                      if (cell.center(0) < x0)
-                                      {
-                                          return prim2cons<2>(left_state, eos);
-                                      }
-                                      else
-                                      {
-                                          return xt::xtensor_fixed<double, xt::xshape<dim + 2>>{u[cell][EulerConsVar::rho],
-                                                                                                u[cell][EulerConsVar::rhoE],
-                                                                                                u[cell][EulerConsVar::mom(0)],
-                                                                                                -u[cell][EulerConsVar::mom(1)]};
-                                      }
-                                  })
+        // downstream of it. This one stays a value function: expressing it as two
+        // conditions restricted by coordinates is what samurai's CoordsRegion is
+        // for, but that path throws on this non-square domain.
+        bc::imposed(u,
+                    [&u, eos](const auto&, const auto& cell, const auto&)
+                    {
+                        if (cell.center(0) < x0)
+                        {
+                            return prim2cons<2>(left_state, eos);
+                        }
+                        else
+                        {
+                            return xt::xtensor_fixed<double, xt::xshape<dim + 2>>{u[cell][EulerConsVar::rho],
+                                                                                  u[cell][EulerConsVar::rhoE],
+                                                                                  u[cell][EulerConsVar::mom(0)],
+                                                                                  -u[cell][EulerConsVar::mom(1)]};
+                        }
+                    })
             ->on(bottom);
 
         // Top: follows the analytic shock position, hence the dependence on t.
-        samurai::make_bc<Imposed>(u,
-                                  [&t, eos](const auto&, const auto& cell, const auto&)
-                                  {
-                                      const double x1 = x0 + 10 * t / std::sin(alpha) + 1 / std::tan(alpha);
-                                      if (cell.center(0) < x1)
-                                      {
-                                          return prim2cons<2>(left_state, eos);
-                                      }
-                                      else
-                                      {
-                                          return prim2cons<2>(right_state, eos);
-                                      }
-                                  })
+        bc::imposed(u,
+                    [&t, eos](const auto&, const auto& cell, const auto&)
+                    {
+                        const double x1 = x0 + 10 * t / std::sin(alpha) + 1 / std::tan(alpha);
+                        if (cell.center(0) < x1)
+                        {
+                            return prim2cons<2>(left_state, eos);
+                        }
+                        else
+                        {
+                            return prim2cons<2>(right_state, eos);
+                        }
+                    })
             ->on(top);
 
         // Right: outflow. Left: the incoming post-shock state.
-        samurai::make_bc<samurai::Neumann<1>>(u, 0., 0., 0., 0.)->on(right);
+        bc::outflow(u)->on(right);
 
-        const auto cons_left = prim2cons<2>(left_state, eos);
-        samurai::make_bc<Imposed>(u,
-                                  cons_left[EulerConsVar::rho],
-                                  cons_left[EulerConsVar::rhoE],
-                                  cons_left[EulerConsVar::mom(0)],
-                                  cons_left[EulerConsVar::mom(1)])
-            ->on(left);
+        bc::imposed(u, left_state, eos)->on(left);
     }
 
     template <std::size_t dim>

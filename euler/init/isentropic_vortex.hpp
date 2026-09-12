@@ -128,7 +128,7 @@ namespace test_case::isentropic_vortex
                  xt::xtensor_fixed<int, xt::xshape<2>>{0,  1 }
         })
         {
-            samurai::make_bc<Imposed>(u, exact_bc)->on(dir);
+            bc::imposed(u, exact_bc)->on(dir);
         }
     }
 

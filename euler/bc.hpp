@@ -25,7 +25,12 @@
 //                 flux vanishes.
 //
 //  The free helpers at the bottom build the boundary conditions the test cases
-//  actually ask for, in any dimension, so that a `bc_fn` is one line.
+//  actually ask for, in any dimension, so that a `bc_fn` is one line. They apply
+//  to every boundary by default; chain `->on(direction)` to restrict one to a
+//  single face, spelling the direction as a vector at the call site:
+//
+//      bc::outflow(u)->on(right);
+//      bc::imposed(u, inflow_state, eos)->on(left);
 //
 //  NOTE  Both conditions fill a SINGLE layer of ghost cells (stencil size 2),
 //  which is all a first-order flux needs. A MUSCL reconstruction reads two
@@ -94,6 +99,15 @@ namespace bc
     auto wall(Field& u)
     {
         return samurai::make_bc<Reflective>(u);
+    }
+
+    // An imposed state given by a function of the boundary cell. This is how a
+    // time-dependent boundary is written: the case captures whatever it needs,
+    // typically the current simulation time, by reference.
+    template <class Field>
+    auto imposed(Field& u, const typename samurai::FunctionBc<Field>::function_t& f)
+    {
+        return samurai::make_bc<Imposed>(u, f);
     }
 
     // A uniform state imposed on every boundary.
