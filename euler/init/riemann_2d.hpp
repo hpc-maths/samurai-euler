@@ -24,8 +24,10 @@
 //      q[0] : x >= x0, y >= y0        q[1] : x <  x0, y >= y0
 //      q[2] : x <  x0, y <  y0        q[3] : x >= x0, y <  y0
 //
-//  TODO (lot 2) the interface should sit at x0 = y0 = 0.8, not 0.5. Corrected in
-//  its own commit, so that this one stays behaviour preserving.
+//  The interfaces sit at x0 = y0 = 0.8 on [0,1]^2, as in Lax & Liu and in the
+//  article this repository reproduces: with t_f = 0.8 the waves then fill
+//  the domain without reaching its boundary, where the outflow condition
+//  would pollute them.
 // =============================================================================
 
 namespace test_case::riemann_2d
@@ -77,8 +79,8 @@ namespace test_case::riemann_2d
 
     // --- configuration 3 -----------------------------------------------------
     inline const Config config_3{
-        0.5,
-        0.5,
+        0.8,
+        0.8,
         {PrimState<2>{1.5, 1.5, {0., 0.}},
           PrimState<2>{0.5323, 0.3, {1.206, 0.}},
           PrimState<2>{0.138, 0.029, {1.206, 1.206}},
@@ -87,8 +89,8 @@ namespace test_case::riemann_2d
 
     // --- configuration 4 -----------------------------------------------------
     inline const Config config_4{
-        0.5,
-        0.5,
+        0.8,
+        0.8,
         {PrimState<2>{1.1, 1.1, {0., 0.}},
           PrimState<2>{0.5065, 0.35, {0.8939, 0.}},
           PrimState<2>{1.1, 1.1, {0.8939, 0.89396}},
@@ -97,8 +99,8 @@ namespace test_case::riemann_2d
 
     // --- configuration 12 ----------------------------------------------------
     inline const Config config_12{
-        0.5,
-        0.5,
+        0.8,
+        0.8,
         {PrimState<2>{0.5197, 0.4, {0., 0.}},
           PrimState<2>{1., 1., {-0.6259, 0.}},
           PrimState<2>{0.8, 1., {-0.6259, -0.6259}},
