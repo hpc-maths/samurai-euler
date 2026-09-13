@@ -99,12 +99,15 @@ double limited_slope(double dm, double dp)
     }
 }
 
-// The same, component by component, on a packed primitive state.
-template <SlopeLimiter limiter, std::size_t Dim, class Array>
-ConsArray<Dim> limited_slope(const Array& dm, const Array& dp)
+// The same, component by component, on a packed state of N components. N rather
+// than the dimension because both models go through here: the monofluid state
+// has dim + 2 components and the two-phase one dim + 4, and a limiter has no
+// opinion on which component is which.
+template <SlopeLimiter limiter, std::size_t N, class Array>
+xt::xtensor_fixed<double, xt::xshape<N>> limited_slope(const Array& dm, const Array& dp)
 {
-    ConsArray<Dim> slope;
-    for (std::size_t i = 0; i < EulerLayout<Dim>::size; ++i)
+    xt::xtensor_fixed<double, xt::xshape<N>> slope;
+    for (std::size_t i = 0; i < N; ++i)
     {
         slope[i] = limited_slope<limiter>(dm[i], dp[i]);
     }
@@ -162,18 +165,18 @@ ConsArray<Dim> primitive_jacobian_times(const PrimState<Dim>& prim, const Array&
 // costs one branch per slope, against one Riemann solve per interface: the
 // limiter stays a command line option without being a template parameter of
 // every scheme.
-template <std::size_t Dim, class Array>
-ConsArray<Dim> limited_slope(const Array& dm, const Array& dp, SlopeLimiter limiter)
+template <std::size_t N, class Array>
+xt::xtensor_fixed<double, xt::xshape<N>> limited_slope(const Array& dm, const Array& dp, SlopeLimiter limiter)
 {
     switch (limiter)
     {
         case SlopeLimiter::none:
-            return limited_slope<SlopeLimiter::none, Dim>(dm, dp);
+            return limited_slope<SlopeLimiter::none, N>(dm, dp);
         case SlopeLimiter::minmod:
-            return limited_slope<SlopeLimiter::minmod, Dim>(dm, dp);
+            return limited_slope<SlopeLimiter::minmod, N>(dm, dp);
         case SlopeLimiter::vanleer:
-            return limited_slope<SlopeLimiter::vanleer, Dim>(dm, dp);
+            return limited_slope<SlopeLimiter::vanleer, N>(dm, dp);
         default:
-            return limited_slope<SlopeLimiter::moncen, Dim>(dm, dp);
+            return limited_slope<SlopeLimiter::moncen, N>(dm, dp);
     }
 }

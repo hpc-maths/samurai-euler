@@ -65,6 +65,9 @@ This will generate output files (e.g., HDF5/XDMF) in the `results` directory (or
 
 *   `euler_1d`: 1D Euler simulation.
 *   `euler_user_pred_1d`: 1D Euler simulation with user-defined prediction.
+*   `two_phase_1d`, `two_phase_2d`: the five-equation two-phase model, a
+    different system of equations from the three above. See
+    [Two-phase flow](#two-phase-flow-the-five-equation-model).
 
 ## Command Line Options
 
@@ -300,6 +303,101 @@ python python/performance.py --levels 9 --mr-eps 1e-4 1e-3 1e-2
   column worth comparing is the sparsity index; the Mcu/s column is worth
   comparing against *itself*, between two runs of this solver.
 
+## Two-phase flow: the five-equation model
+
+`two_phase_1d` and `two_phase_2d` solve a different system from the three
+binaries above: two compressible fluids sharing the mesh, in pressure and
+velocity equilibrium, with an interface between them.
+
+```
+d_t (alpha_i rho_i) + div(alpha_i rho_i u) = 0      i = 0, 1
+d_t (rho u)         + div(rho u @ u + p I) = 0
+d_t E               + div((E + p) u)       = 0
+d_t alpha_0         + u . grad(alpha_0)    = 0
+```
+
+so `dim + 4` components per cell, against `dim + 2` for the monofluid solver.
+Each phase is a stiffened gas, and the mixture behaves as one whose coefficients
+depend on the volume fraction:
+
+```
+1 / (gamma_m - 1) = sum_i alpha_i / (gamma_i - 1)
+gamma_m pi_m / (gamma_m - 1) = sum_i alpha_i gamma_i pi_i / (gamma_i - 1)
+```
+
+Those two sums are the whole equation of state, and the fact that both are
+**linear in alpha** is what makes the model work: it is exactly what lets a
+uniform pressure survive the averaging of two fluids in one cell.
+
+### What is different in the scheme
+
+The first four equations are conservation laws and go through the Riemann solver
+the monofluid ones do, with the mixture sound speed and the two partial
+densities carried through the contact. The fifth is not a conservation law, and
+is discretized with the contact velocity `u*` the Riemann solver already
+computes:
+
+```
+alpha_i^{n+1} = alpha_i - dt/dx [ (u* alpha*)_{i+1/2} - (u* alpha*)_{i-1/2}
+                                  - alpha_i (u*_{i+1/2} - u*_{i-1/2}) ]
+```
+
+The term in `alpha_i` is the cell's own volume fraction, so the two cells an
+interface separates receive different contributions from it. samurai calls that
+a non-conservative flux and takes a pair of values per face, which is what the
+two-phase scheme returns; the four conservation laws take the conservative pair
+and are conserved to the last bit — the test suite holds them to 1e-12.
+
+`--scheme`, `--order`, `--slope-limiter` and `--time-integrator` mean what they
+mean for the monofluid solver, and the Hancock predictor is the same one with
+two more equations.
+
+### Test cases
+
+| Case | What it is |
+| :--- | :--------- |
+| `water_air_shock_tube` | Section 6.1.1 of the article: water at 1e9 Pa against air at 1e5, tube [-2, 2], diaphragm at 0.7, `t_f = 9e-4`. In 2D the domain is [-2,2] x [-0.4,0.4], where level 6 is exactly the 320 x 64 equivalent resolution the article quotes. |
+| `triple_point` | Section 6.1.2, as the article poses it: two gases, `gamma = 1.5` in regions 1 and 3 and 1.4 in region 2, [0,7] x [0,3], `t_f = 2.0`. `triple_point_single_gamma` in the monofluid solver is the same geometry with one gas and says at length that it is not this case. |
+| `advected_interface` | A slab of water in air, everything at one atmosphere and moving at 100 m/s. The exact solution is the initial state translated, and a scheme that advects the volume fraction inconsistently with the masses produces a pressure spike out of nothing. |
+
+```bash
+./two_phase_1d --test-case water_air_shock_tube --min-level 10 --max-level 10 --order 2
+./two_phase_2d --test-case water_air_shock_tube --min-level 4 --max-level 6 --order 2
+./two_phase_2d --test-case triple_point --min-level 4 --max-level 8 --Tf 2.0 --order 2
+```
+
+A run writes the volume fraction, the mixture density and pressure, the velocity
+**and the two partial densities**: `alpha * rho` is not the mass of either phase
+in a mixed cell, and anything checking conservation needs the real ones.
+
+### What it is held to
+
+`python/exact_two_phase_riemann.py` solves the two-material stiffened-gas
+Riemann problem exactly, which is what the shock tube is measured against rather
+than a figure read by eye: `p* = 4.796906e5 Pa`, `u* = 491.97 m/s`,
+`rho*_water = 800.33`, `rho*_air = 2.758`. At level 10 and second order the
+solver reaches an L1 error of 1.5e-3 on the density, puts the contact within one
+cell of `x = 1.1428` and the interface on about nine cells.
+
+The interface condition is a separate test and a stricter one: on
+`advected_interface` the pressure stays uniform to 1e-11 relative and the
+velocity to 1e-14, which is round-off and not a physical smallness.
+
+### What is not there yet
+
+- **THINC interface sharpening.** The article publishes the shock tube with and
+  without it, so the diffuse-interface runs above are a comparison point of their
+  own; the sharpening is a reconstruction to be swapped in for the volume
+  fraction in mixed cells, and it is what takes the interface from nine cells to
+  two or three.
+- **The positivity-preserving multiresolution prediction** of the monofluid
+  solver, which keys on the Euler layout. An adapted two-phase run has the
+  default prediction plus the admissibility floor, which clamps the volume
+  fraction to [0, 1], the partial densities to non-negative and the pressure
+  above the vacuum of the mixture.
+- **The shock-bubble cases** of sections 6.1.3 and 6.1.4, which need this model
+  and are out of reach on a workstation at the resolutions they are published at.
+
 ## Tests
 
 The suite drives the built binaries as subprocesses, so it checks what a user
@@ -329,6 +427,12 @@ multiresolution threshold flips a refinement decision, the mesh changes, and the
 comparison fails on another compiler without anything being wrong. Regenerate
 the references with `pytest --generate-ref`, and say in the commit message why
 they moved.
+
+`test_two_phase.py` covers the five-equation model on all three tiers at once,
+the model being new enough that splitting it across the three files would scatter
+it: the interface condition and conservation as invariants, three reference files
+for the three Riemann solvers, and the water-air tube against its exact solution
+as a slow test.
 
 `test_validation.py` is marked slow and asserts on scalars rather than fields,
 which is what makes it usable on an adapted mesh. It measures the convergence

@@ -118,6 +118,11 @@ def read(h5file):
             "pressure": group["pressure"][:],
             "velocity": np.stack([group[n][:] for n in names], axis=1),
         }
+        # The two-phase solver writes the volume fraction and the two partial
+        # densities as well; the monofluid one has nothing to put there.
+        for extra in ("alpha", "partial_rho_0", "partial_rho_1"):
+            if extra in group:
+                fields[extra] = group[extra][:]
 
     return centers, volume, fields
 

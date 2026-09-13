@@ -22,6 +22,10 @@ struct EulerLayout
 
 // One state of the system, whichever variables it is written in: the layout
 // above says which component is what.
+// The five-equation two-phase model puts its momentum at the same place, and
+// euler/bc.hpp writes one solid wall for both against that convention.
+static_assert(EulerLayout<1>::mom(0) == 2 && EulerLayout<2>::mom(1) == 3 && EulerLayout<3>::mom(2) == 4);
+
 template <std::size_t Dim>
 using ConsArray = xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size>>;
 

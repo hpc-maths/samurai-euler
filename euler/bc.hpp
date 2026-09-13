@@ -48,6 +48,16 @@ namespace detail
     {
         return stencil_size / 2;
     }
+
+    // Where the momentum sits, in any of the models this repository solves: the
+    // monofluid Euler system and the five-equation two-phase one put it at the
+    // same place on purpose, and each layout holds itself to it with a
+    // static_assert. The solid wall is then one boundary condition rather than
+    // one per model, since mirroring the normal momentum is all it does.
+    inline constexpr std::size_t momentum(std::size_t d)
+    {
+        return 2 + d;
+    }
 }
 
 template <std::size_t StencilSize, class Field>
@@ -98,8 +108,8 @@ struct ReflectiveImpl : public samurai::Bc<Field>
                 const auto& inside = cells[ghost0 - 1 - k];
                 const auto& ghost  = cells[ghost0 + k];
 
-                u[ghost]                                       = u[inside];
-                u[ghost][EulerLayout<Field::dim>::mom(normal)] = -u[inside][EulerLayout<Field::dim>::mom(normal)];
+                u[ghost]                           = u[inside];
+                u[ghost][detail::momentum(normal)] = -u[inside][detail::momentum(normal)];
             }
         };
     }
