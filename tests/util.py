@@ -9,6 +9,7 @@ scheme, so two binaries asked for the same case would otherwise overwrite each
 other.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -72,6 +73,20 @@ def run_case(binary, workdir, case, scheme="hllc", label=None, **options):
     stem = f"{label or case}_{scheme}"
     out = run(binary, workdir, test_case=case, scheme=scheme, filename=stem, **options)
     return out, stem
+
+
+METRICS = "metrics.json"
+
+
+def run_case_with_metrics(binary, workdir, case, **options):
+    """Run one case with --metrics-file, and read the metrics back.
+
+    Returns (metrics, output file stem): what the run reports about itself, and
+    what it computed, which is what makes the two comparable.
+    """
+    out, stem = run_case(binary, workdir, case, metrics_file=METRICS, **options)
+    with open(Path(workdir) / METRICS) as handle:
+        return json.load(handle), out / stem
 
 
 def read(h5file):
