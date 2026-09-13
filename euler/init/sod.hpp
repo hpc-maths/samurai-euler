@@ -13,12 +13,20 @@
 #include "registry.hpp"
 
 // =============================================================================
-//  Sod shock tube, rotated by 45 degrees
+//  Sod shock tube
 // -----------------------------------------------------------------------------
-//  The classical 1D Riemann problem, laid out along a diagonal of a 2D domain so
-//  that the solution is not aligned with the mesh. Any directional bias in the
-//  scheme or in the adaptation shows up as a distortion of what should stay a
-//  planar wave.
+//  The classical 1D Riemann problem, in two layouts that share their states:
+//
+//    - `sod_x`, along the x axis, which is the tube as the article this
+//      repository reproduces runs it (its fig. 7) and the one to hold against
+//      the exact solution, no projection in the way. It is dimension agnostic:
+//      with the velocity zero and the discontinuity normal to x, the same
+//      definition serves euler_1d, euler_2d and euler_3d.
+//
+//    - `sod`, laid out along a diagonal of a 2D domain so that the solution is
+//      not aligned with the mesh. Any directional bias in the scheme or in the
+//      adaptation shows up as a distortion of what should stay a planar wave.
+//      The rotation is ours, not Sod's, and not the article's.
 //
 //  The states are those of
 //
@@ -33,32 +41,41 @@
 //      https://doi.org/10.1007/b79761
 //
 //  whose exact solution python/exact_riemann.py computes: p* = 0.30313,
-//  u* = 0.92745. The 45 degree rotation is ours, not Sod's; the article this
-//  repository reproduces uses the axis-aligned tube.
+//  u* = 0.92745.
 // =============================================================================
 
 namespace test_case::sod
 {
     using field_t = config<2>::field_t;
 
+    // The two states of the tube. Written once, in any dimension: both layouts
+    // below are the same Riemann problem and must not be able to drift apart.
+    template <std::size_t dim>
+    PrimState<dim> left_state()
+    {
+        PrimState<dim> state{1., 1., {}};
+        state.v.fill(0.);
+        return state;
+    }
+
+    template <std::size_t dim>
+    PrimState<dim> right_state()
+    {
+        PrimState<dim> state{0.125, 0.1, {}};
+        state.v.fill(0.);
+        return state;
+    }
+
+    // Where the diaphragm sits, the same fraction of the domain in both layouts.
+    inline constexpr double x_diaphragm = 0.5;
+
+    // The diagonal of `sod`, and the line the diaphragm sits on.
     inline const double theta = std::numbers::pi / 4.;
 
     inline const double Rdx = std::sin(theta);
     inline const double Rdy = std::cos(theta);
-    inline const double k   = 0.5 / Rdy;
-    inline const double x0  = 0.5 + k * Rdx;
-
-    inline const PrimState<2> left_state{
-        1.,
-        1.,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
-    };
-
-    inline const PrimState<2> right_state{
-        0.125,
-        0.1,
-        xt::xtensor_fixed<double, xt::xshape<2>>{0., 0.}
-    };
+    inline const double k   = x_diaphragm / Rdy;
+    inline const double x0  = x_diaphragm + k * Rdx;
 
     inline void init_fn(field_t& u, const typename field_t::cell_t& cell, EOS::IdealGas eos)
     {
@@ -68,11 +85,11 @@ namespace test_case::sod
 
         if (x[1] < y_theta)
         {
-            u[cell] = prim2cons<2>(left_state, eos);
+            u[cell] = prim2cons<2>(left_state<2>(), eos);
         }
         else
         {
-            u[cell] = prim2cons<2>(right_state, eos);
+            u[cell] = prim2cons<2>(right_state<2>(), eos);
         }
     }
 
@@ -84,8 +101,10 @@ namespace test_case::sod
     template <std::size_t dim>
     auto box_fn()
     {
-        xt::xtensor_fixed<double, xt::xshape<dim>> min_corner = {0., 0.};
-        xt::xtensor_fixed<double, xt::xshape<dim>> max_corner = {1., 1.};
+        xt::xtensor_fixed<double, xt::xshape<dim>> min_corner;
+        xt::xtensor_fixed<double, xt::xshape<dim>> max_corner;
+        min_corner.fill(0.);
+        max_corner.fill(1.);
 
         return samurai::Box<double, dim>(min_corner, max_corner);
     }
@@ -98,4 +117,38 @@ namespace test_case::sod
     }
 }
 
+// The axis-aligned tube, which is the one the article runs and the one the
+// exact solution is compared against. It reuses everything above but the
+// geometry of the diaphragm.
+namespace test_case::sod_x
+{
+    template <class Field>
+    void init_fn(Field& u, const typename Field::cell_t& cell, EOS::IdealGas eos)
+    {
+        static constexpr std::size_t dim = Field::dim;
+
+        if (cell.center(0) < sod::x_diaphragm)
+        {
+            u[cell] = prim2cons<dim>(sod::left_state<dim>(), eos);
+        }
+        else
+        {
+            u[cell] = prim2cons<dim>(sod::right_state<dim>(), eos);
+        }
+    }
+
+    template <class Field>
+    void bc_fn(Field& u, double& /*t*/, EOS::IdealGas /*eos*/)
+    {
+        bc::outflow(u);
+    }
+
+    template <class Field>
+    test_case::TestCase<Field> definition()
+    {
+        return {.box = &sod::box_fn<Field::dim>, .init = &init_fn<Field>, .bc = &bc_fn<Field>, .eos = EOS::ideal_gas(1.4)};
+    }
+}
+
 REGISTER_TEST_CASE(sod, test_case::sod, 2)
+REGISTER_TEST_CASE(sod_x, test_case::sod_x, 1, 2, 3)

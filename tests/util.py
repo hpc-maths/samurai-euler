@@ -61,14 +61,17 @@ def run(binary, workdir, **options):
     return workdir / options.get("path", "results")
 
 
-def run_case(binary, workdir, case, scheme="hllc", **options):
+def run_case(binary, workdir, case, scheme="hllc", label=None, **options):
     """Run one test case and return (output directory, output file stem).
 
     The scheme is always passed explicitly: its default differs between the
-    binaries, and the output file is named after it.
+    binaries, and the output file is named after it. `label` renames the output
+    when the case alone does not identify the run: two configurations of
+    `lax_liu` are the same case and would otherwise write the same file.
     """
-    out = run(binary, workdir, test_case=case, scheme=scheme, **options)
-    return out, f"{case}_{scheme}"
+    stem = f"{label or case}_{scheme}"
+    out = run(binary, workdir, test_case=case, scheme=scheme, filename=stem, **options)
+    return out, stem
 
 
 def read(h5file):

@@ -155,6 +155,37 @@ def test_closed_box_conserves_mass_and_energy(tmp_path):
     assert np.abs(fields_1["rho"] - fields_0["rho"]).max() > 1e-3
 
 
+def test_periodic_box_conserves_mass_energy_and_momentum(tmp_path):
+    """A periodic box has no boundary at all, so nothing can leave it.
+
+    The closed box above conserves through the reflective wall; here the ghost
+    cells are filled by samurai's periodic update instead, which is different
+    code, and momentum is conserved as well, which a wall does not conserve.
+
+    It also pins the gas. The total energy is reconstructed here from the
+    pressure at gamma = 5/3, the value blast_periodic declares; the solver
+    conserves the energy it computed with its own gamma, and the two agree only
+    if they are the same gamma. Run the case at 1.4 and this test fails by
+    several percent, which makes it the check that --gamma and the equation of
+    state carried by a test case are really data.
+    """
+    gamma = 5.0 / 3.0
+
+    out, stem = run_case("euler_2d", tmp_path, "blast_periodic", min_level=6, max_level=6, Tf=0.05)
+    _, volume_0, fields_0 = read(out / f"{stem}_init")
+    _, volume_1, fields_1 = read(out / stem)
+
+    before = conservative(volume_0, fields_0, gamma)
+    after = conservative(volume_1, fields_1, gamma)
+
+    assert abs(after["mass"] - before["mass"]) / before["mass"] < 1e-12
+    assert abs(after["energy"] - before["energy"]) / before["energy"] < 1e-12
+    # the gas starts at rest and the box is symmetric, so momentum stays at zero
+    assert np.abs(after["momentum"]).max() < 1e-12 * before["mass"]
+    # and the solution did move, otherwise conservation is trivial
+    assert np.abs(fields_1["rho"] - fields_0["rho"]).max() > 1e-3
+
+
 @pytest.mark.parametrize("binary,case,level", [("euler_1d", "double_rarefaction", 8), ("euler_2d", "sod", 6)])
 def test_restart_reproduces_the_run(binary, case, level, tmp_path):
     """Reloading the dumped state and running from it must give the same answer.

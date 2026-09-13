@@ -90,6 +90,24 @@ Run `./euler_2d --help` for the list of available test cases: it is read from
 the registry, so it always matches what the binary actually supports. `euler_3d`
 accepts the same options and exposes the cases that are defined in 3D.
 
+### Test case parameters
+
+A case that comes in variants declares its own option, and `--help` lists them
+under *Test case parameters*. There is one today:
+
+| Option             | Description                                                   | Default |
+| :----------------- | :------------------------------------------------------------ | :------ |
+| `--riemann-config` | Lax & Liu configuration of the `lax_liu` case, 1 to 19         | `3`     |
+
+`lax_liu` is the four-quadrant Riemann problem in two dimensions and the eight
+octant one in three. In 3D only configuration 3 exists, the one the article
+extends, and `--riemann-config` there accepts nothing else.
+
+The options of *every* case are declared, not only those of the selected one:
+which case runs is itself decided by the parse. Two cases must therefore not ask
+for the same option name, and naming the option after the case is what keeps
+them apart.
+
 ### Order and time stepping
 
 `--scheme` and `--order` are independent: the first says which Riemann solver
@@ -153,6 +171,13 @@ Run a case with a different gas, writing somewhere else:
 ./euler_2d --test-case sedov_blast --gamma 1.6666667 --path out --filename sedov_g53
 ```
 
+Run the reference case of the article, configuration 3 of Lax & Liu, to its
+final time on an adapted mesh:
+
+```bash
+./euler_2d --test-case lax_liu --riemann-config 3 --min-level 4 --max-level 10 --Tf 0.8 --order 2
+```
+
 ## Tests
 
 The suite drives the built binaries as subprocesses, so it checks what a user
@@ -167,10 +192,10 @@ It has three tiers, and they are not interchangeable.
 
 `test_invariants.py` owns no reference file. It asserts properties that stay
 true when the numerics legitimately change: a uniform flow stays uniform, a
-closed box conserves mass and energy, density and pressure stay positive, the
-Sedov blast keeps its rotational symmetry, a restart reproduces the run. A
-better scheme cannot make these fail, and no amount of regenerating can make
-them pass.
+closed box conserves mass and energy and a periodic one conserves momentum as
+well, density and pressure stay positive, the Sedov blast keeps its rotational
+symmetry, a restart reproduces the run. A better scheme cannot make these fail,
+and no amount of regenerating can make them pass.
 
 `test_regression.py` compares whole fields against references under
 `tests/reference`. Every case there runs on a **uniform** mesh, on purpose: on
@@ -182,18 +207,36 @@ they moved.
 
 `test_validation.py` is marked slow and asserts on scalars rather than fields,
 which is what makes it usable on an adapted mesh. It measures the convergence
-order of the isentropic vortex against its exact solution, and checks that
-adaptation reaches the same error as a uniform mesh with fewer cells.
+order of the isentropic vortex against its exact solution, checks that
+adaptation reaches the same error as a uniform mesh with fewer cells, holds the
+two shock tubes to the exact Riemann solution of `python/exact_riemann.py` — L1
+errors and the position of each wave — and holds the six Lax & Liu
+configurations that are symmetric about the diagonal to that symmetry, which a
+single mistyped digit in one quadrant breaks.
 
 ## Adding a test case
 
 A test case is a domain, an initial state, a set of boundary conditions and the
-gas it is written for. Add a header in `euler/init/`, expose `register_me()`, and
-list it in `register_all()` in `euler/init/cases.hpp`. Cases whose definition
-does not depend on the dimension (`free_stream`, `sedov_blast`) are templated on
-the field and serve `euler_1d`, `euler_2d` and `euler_3d`; the others register
-for the dimensions they are written for. The boundary conditions the cases need — outflow, solid wall, an imposed
-state — are in `euler/bc.hpp` and work in any dimension.
+gas it is written for. Add a header in `euler/init/`, expose `definition<Field>()`
+in a namespace of its own, close the file with
+
+```cpp
+REGISTER_TEST_CASE(my_case, test_case::my_case, 2, 3)
+```
+
+and add one `#include` to `euler/init/cases.hpp`. There is no list to keep in
+sync: the trailing numbers are the dimensions the case is written for, and a
+case whose definition does not depend on the dimension (`free_stream`,
+`sedov_blast`, `sod_x`) passes all three and serves `euler_1d`, `euler_2d` and
+`euler_3d`. The boundary conditions the cases need — outflow, solid wall, an
+imposed state — are in `euler/bc.hpp` and work in any dimension; a case with no
+boundary at all sets `periodic` instead, as `blast_periodic` does.
+
+A case that takes a parameter of its own gives the registry an `options`
+function, which declares the command line option and keeps the variable the
+parser writes into. `lax_liu` is the worked example: the parameter is read when
+a cell is initialised, which is after the parse, and the values the option
+accepts depend on the dimension the case was registered for.
 
 Give the case the gas it was written for through its `eos` field: monofluid
 cases use `EOS::ideal_gas(gamma)`. `euler/eos.hpp` also defines a stiffened gas
