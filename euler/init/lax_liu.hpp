@@ -5,6 +5,8 @@
 
 #include <array>
 #include <cstddef>
+#include <stdexcept>
+#include <string>
 
 #include <CLI/CLI.hpp>
 #include <samurai/box.hpp>
@@ -41,10 +43,19 @@
 //      q[0] : x >= x0, y >= y0        q[1] : x <  x0, y >= y0
 //      q[2] : x <  x0, y <  y0        q[3] : x >= x0, y <  y0
 //
-//  The interfaces sit at x0 = y0 = 0.8 on [0,1]^2, as in Lax & Liu and in the
-//  article this repository reproduces: with t_f = 0.8 the waves then fill the
-//  domain without reaching its boundary, where the outflow condition would
-//  pollute them.
+//  Where the interfaces sit is not part of the classification. Lax & Liu and
+//  Kurganov & Tadmor classify four states and put them in the four quadrants of
+//  the unit square, meeting at its centre. The default here is x0 = y0 = 0.8,
+//  the position the article this repository reproduces uses for its
+//  configuration 3 (its eq. 4): with t_f = 0.8 the waves then fill the domain
+//  without reaching its boundary, where the outflow condition would pollute
+//  them.
+//
+//  That default suits configurations 3 and 4 and misleads for the other
+//  seventeen, whose structure is born 0.2 from the upper right corner and
+//  reaches it well before the final times the published figures use. Anyone
+//  comparing against Kurganov & Tadmor rather than against the article wants
+//  `--riemann-interface 0.5`.
 //
 //  Three dimensions
 //  ----------------
@@ -89,15 +100,19 @@ namespace test_case::lax_liu
     using Quadrants = std::array<PrimState<2>, 4>;
     using Octants   = std::array<PrimState<3>, 8>;
 
-    // Where the interfaces sit, on the unit box, in every direction.
-    inline constexpr double x0 = 0.8;
-
-    // Which configuration runs. `--riemann-config` writes into it, so it is read
-    // when a cell is initialised and not before.
+    // Which configuration runs, and where its interfaces sit on the unit box, in
+    // every direction. `--riemann-config` and `--riemann-interface` write into
+    // these, so both are read when a cell is initialised and not before.
     inline int& selected_config()
     {
         static int number = 3;
         return number;
+    }
+
+    inline double& selected_interface()
+    {
+        static double x0 = 0.8;
+        return x0;
     }
 
     // (rho, p, (u, v)) per quadrant, configurations 1 to 19 in order.
@@ -208,14 +223,29 @@ namespace test_case::lax_liu
         PrimState<3>{0.5323, 0.3,   {0., 1.206, 0.}      }, //          lower right
         PrimState<3>{0.5323, 0.3,   {0., 0., 1.206}      }, // z <  z0, upper right
         PrimState<3>{0.138,  0.029, {1.206, 0., 1.206}   }, //          upper left
-        PrimState<3>{0.138,  0.029, {1.206, 1.206, 1.206}}, //      lower left
+        PrimState<3>{0.138,  0.029, {1.206, 1.206, 1.206}}, //          lower left
         PrimState<3>{0.138,  0.029, {0., 1.206, 1.206}   }, //          lower right
     };
+
+    // The octant states of a configuration. Configuration 3 is the only one the
+    // article extends to three dimensions and the only one tabulated here, and
+    // `--riemann-config` is restricted to it in euler_3d: reaching the throw
+    // means a configuration was added to that restriction and not to this table.
+    inline const Octants& octants(int configuration)
+    {
+        if (configuration != 3)
+        {
+            throw std::runtime_error("Lax & Liu configuration " + std::to_string(configuration) + " has no three-dimensional states");
+        }
+        return octants_config_3;
+    }
 
     // Which of the four quadrants, or of the eight octants, a point falls in.
     template <std::size_t dim>
     std::size_t region(const auto& x)
     {
+        const double x0 = selected_interface();
+
         const bool right = x[0] >= x0;
         const bool above = x[1] >= x0;
 
@@ -245,7 +275,7 @@ namespace test_case::lax_liu
         }
         else
         {
-            u[cell] = prim2cons<3>(octants_config_3[region<3>(x)], eos);
+            u[cell] = prim2cons<3>(octants(selected_config())[region<3>(x)], eos);
         }
     }
 
@@ -285,6 +315,13 @@ namespace test_case::lax_liu
         {
             option->check(CLI::IsMember({3}));
         }
+
+        app.add_option("--riemann-interface",
+                       selected_interface(),
+                       "Where the quadrants of the lax_liu test case meet (0.5 is the published convention)")
+            ->capture_default_str()
+            ->check(CLI::Range(0., 1.))
+            ->group("Test case parameters");
     }
 
     template <class Field>

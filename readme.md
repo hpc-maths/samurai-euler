@@ -93,15 +93,24 @@ accepts the same options and exposes the cases that are defined in 3D.
 ### Test case parameters
 
 A case that comes in variants declares its own option, and `--help` lists them
-under *Test case parameters*. There is one today:
+under *Test case parameters*. There are two today, both belonging to `lax_liu`:
 
-| Option             | Description                                                   | Default |
-| :----------------- | :------------------------------------------------------------ | :------ |
-| `--riemann-config` | Lax & Liu configuration of the `lax_liu` case, 1 to 19         | `3`     |
+| Option                | Description                                             | Default |
+| :-------------------- | :------------------------------------------------------ | :------ |
+| `--riemann-config`    | Lax & Liu configuration, 1 to 19                         | `3`     |
+| `--riemann-interface` | Where the quadrants meet, in each direction              | `0.8`   |
 
 `lax_liu` is the four-quadrant Riemann problem in two dimensions and the eight
 octant one in three. In 3D only configuration 3 exists, the one the article
 extends, and `--riemann-config` there accepts nothing else.
+
+The interface position is not part of the classification. Lax & Liu and
+Kurganov & Tadmor put the four quadrants of the unit square at its centre; the
+default here is 0.8, which is what the article uses for configuration 3 so that
+the waves fill the domain by `t_f = 0.8` without reaching the boundary. It
+suits configurations 3 and 4 and misleads for the other seventeen, whose
+structure is born 0.2 from a corner and reaches it early: pass
+`--riemann-interface 0.5` to compare those against their published figures.
 
 The options of *every* case are declared, not only those of the selected one:
 which case runs is itself decided by the parse. Two cases must therefore not ask
@@ -178,6 +187,13 @@ final time on an adapted mesh:
 ./euler_2d --test-case lax_liu --riemann-config 3 --min-level 4 --max-level 10 --Tf 0.8 --order 2
 ```
 
+Run configuration 5 as Kurganov & Tadmor publish it, quadrants meeting at the
+centre:
+
+```bash
+./euler_2d --test-case lax_liu --riemann-config 5 --riemann-interface 0.5 --Tf 0.3
+```
+
 ## Tests
 
 The suite drives the built binaries as subprocesses, so it checks what a user
@@ -198,7 +214,10 @@ symmetry, a restart reproduces the run. A better scheme cannot make these fail,
 and no amount of regenerating can make them pass.
 
 `test_regression.py` compares whole fields against references under
-`tests/reference`. Every case there runs on a **uniform** mesh, on purpose: on
+`tests/reference`. One test there compares no field against a reference but the
+references against each other: three identical files for the three Riemann
+solvers mean the entry exercises none of them, which happens when a run is too
+short to leave the initial state or too coarse to resolve it. Every case there runs on a **uniform** mesh, on purpose: on
 an adapted mesh a rounding difference of the order of 1e-16 near the
 multiresolution threshold flips a refinement decision, the mesh changes, and the
 comparison fails on another compiler without anything being wrong. Regenerate

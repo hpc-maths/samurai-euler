@@ -114,15 +114,26 @@ namespace test_case
         // Every case, not only the selected one: --test-case is itself an option
         // and is not known until the parse is over. So two cases must not ask
         // for the same option name, and the convention that keeps them apart is
-        // to name the option after the case. A collision raises a CLI11
-        // exception at startup rather than silently shadowing one of them.
+        // to name the option after the case. A collision is caught here rather
+        // than left to CLI11, which knows the name of the option but not which
+        // cases are fighting over it.
         void add_options(CLI::App& app) const
         {
-            for (const auto& [_, test_case] : test_cases_)
+            for (const auto& [name, test_case] : test_cases_)
             {
-                if (test_case.options)
+                if (!test_case.options)
+                {
+                    continue;
+                }
+
+                try
                 {
                     test_case.options(app);
+                }
+                catch (const CLI::OptionAlreadyAdded& e)
+                {
+                    throw std::runtime_error("test case '" + name + "' declares an option another case already declared (" + e.what()
+                                             + "); name a case option after its case");
                 }
             }
         }

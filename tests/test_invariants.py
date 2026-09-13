@@ -89,7 +89,10 @@ def test_strang_is_a_single_sweep_in_one_dimension(tmp_path):
         ("euler_1d", "sedov_blast", 8),
         ("euler_2d", "sedov_blast", 6),
         ("euler_2d", "double_mach_reflection", 6),
-        ("euler_3d", "sedov_blast", 4),
+        # level 5, not 4: at level 4 no cell centre falls inside the blast in
+        # three dimensions, and the case is then a uniform gas at rest, whose
+        # positivity says nothing about the scheme.
+        ("euler_3d", "sedov_blast", 5),
     ],
 )
 def test_density_and_pressure_stay_positive(binary, case, level, order, tmp_path):
@@ -153,6 +156,25 @@ def test_closed_box_conserves_mass_and_energy(tmp_path):
     assert abs(after["energy"] - before["energy"]) / before["energy"] < 1e-12
     # and the solution did move, otherwise conservation is trivial
     assert np.abs(fields_1["rho"] - fields_0["rho"]).max() > 1e-3
+
+
+@pytest.mark.parametrize("interface", [0.5, 0.8])
+def test_riemann_interface_sits_where_it_is_asked_to(interface, tmp_path):
+    """`--riemann-interface` moves the corner the four quadrants meet at.
+
+    0.8 is the default, the position the article uses; 0.5 is the convention of
+    the papers that classify the configurations. The upper right quadrant of
+    configuration 3 is the only one at density 1.5, so counting its cells says
+    exactly where the corner landed, with no tolerance needed on a uniform mesh.
+    """
+    level = 6
+    out, stem = run_case("euler_2d", tmp_path, "lax_liu", riemann_config=3,
+                         riemann_interface=interface, min_level=level, max_level=level, Tf=0.002)
+    _, _, fields = read(out / f"{stem}_init")
+
+    n = 2**level
+    across = sum(1 for i in range(n) if (i + 0.5) / n >= interface)
+    assert (fields["rho"] == 1.5).sum() == across * across
 
 
 def test_periodic_box_conserves_mass_energy_and_momentum(tmp_path):
