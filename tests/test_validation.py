@@ -25,18 +25,19 @@ from error_analysis import errors, exact_vortex  # noqa: E402
 pytestmark = pytest.mark.slow
 
 # The vortex is smooth, so the error decays at the design order of the scheme.
-# HLLC without reconstruction and explicit Euler in time are first order.
+# The thresholds below are for `--order 1`, which is the default: HLLC without
+# reconstruction and explicit Euler in time are first order. The second order is
+# held to its own thresholds further down.
 #
 # The measured order approaches the design value from below, so the coarsest
 # pair of resolutions is the loosest: at levels 5 to 7 it reads 0.95 then 0.97.
-# Hence two thresholds rather than one. Move both up by one when the
-# MUSCL-Hancock update lands: this is the assertion that keeps second order once
-# it has been gained.
+# Hence two thresholds rather than one.
 MIN_ORDER = 0.90         # every consecutive pair
 MIN_FINEST_ORDER = 0.95  # the finest pair, where the asymptotic rate shows
 
 TF = 0.2
 LEVELS = [5, 6, 7]
+ORDERS = [1, 2]
 
 
 def vortex_error(workdir, level, min_level=None, **options):
@@ -98,21 +99,43 @@ def test_adaptation_costs_no_accuracy(tmp_path):
 # ---------------------------------------------------------------------------
 # These check that the cases reproduce the papers they were taken from.
 # test_regression.py checks something else, that they still compute what they
-# computed yesterday. The thresholds are what a first-order scheme
-# reaches at these resolutions, with room to spare; they should be tightened
-# when the MUSCL-Hancock update lands.
+# computed yesterday.
+#
+# The two shock tubes run at both orders, each against its own thresholds: what
+# the order-2 numbers are worth depends on the limiter, and a limiter that has
+# gone wrong at a discontinuity would pass every smooth measurement in this
+# file, those being made with no limiter at all. The thresholds are the error
+# each order actually reaches at these resolutions, with a factor of two or so
+# of room.
 from exact_riemann import solution as exact_riemann_solution  # noqa: E402
 from exact_riemann import star_state  # noqa: E402
 from sedov_exact import shock_radius  # noqa: E402
 
+TOLERANCE = {
+    # 123 problem, 4096 cells, t = 0.15
+    "double_rarefaction": {
+        #        L1 rho   L1 u    L1 p    min p, in units of the exact p*
+        1: dict(rho=1e-2, u=3e-2, p=1e-2, star=3.0),
+        2: dict(rho=1e-3, u=6e-3, p=2e-4, star=1.5),
+    },
+    # Sod rotated 45 degrees, 512 x 512, t = 0.2
+    "sod": {
+        #        L1 rho   L1 u    L1 p    largest transverse velocity
+        1: dict(rho=2e-2, u=2e-2, p=2e-2, across=5e-3),
+        2: dict(rho=4e-3, u=5e-3, p=3e-3, across=1.5e-2),
+    },
+}
 
-def test_double_rarefaction_matches_toro_test_2(tmp_path):
+
+@pytest.mark.parametrize("order", ORDERS)
+def test_double_rarefaction_matches_toro_test_2(order, tmp_path):
     """The 123 problem against the exact solution of Toro's Table 4.1, test 2."""
     level, tf = 12, 0.15
     left, right = (1.0, -2.0, 0.4), (1.0, 2.0, 0.4)
+    tol = TOLERANCE["double_rarefaction"][order]
 
     out, stem = run_case("euler_1d", tmp_path, "double_rarefaction",
-                         min_level=level, max_level=level, Tf=tf)
+                         min_level=level, max_level=level, Tf=tf, order=order)
     centers, volume, fields = read(out / stem)
     x = centers[:, 0]
     rho, u, p = exact_riemann_solution(x, tf, left, right, x0=0.5)
@@ -120,28 +143,34 @@ def test_double_rarefaction_matches_toro_test_2(tmp_path):
     def l1(computed, exact):
         return float(np.sum(np.abs(computed - exact) * volume) / np.sum(volume))
 
-    assert l1(fields["rho"], rho) < 1e-2
-    assert l1(fields["velocity"][:, 0], u) < 3e-2
-    assert l1(fields["pressure"], p) < 1e-2
+    assert l1(fields["rho"], rho) < tol["rho"]
+    assert l1(fields["velocity"][:, 0], u) < tol["u"]
+    assert l1(fields["pressure"], p) < tol["p"]
 
-    # the near-vacuum is what the case is for: a first-order scheme sits above
-    # the exact star pressure, and must not sit far above it
+    # the near-vacuum is what the case is for: both orders sit above the exact
+    # star pressure, and neither may sit far above it
     p_star, _ = star_state(left, right)
-    assert p_star < fields["pressure"].min() < 3.0 * p_star
+    assert p_star < fields["pressure"].min() < tol["star"] * p_star
 
 
-def test_sod_matches_its_exact_solution(tmp_path):
+@pytest.mark.parametrize("order", ORDERS)
+def test_sod_matches_its_exact_solution(order, tmp_path):
     """Sod's tube, rotated 45 degrees, against the exact solution.
 
     Two things at once: the waves must be in the right place, and the solution
     must stay one-dimensional along the diagonal. The transverse velocity is the
-    isotropy measure the rotation was introduced for.
+    isotropy measure the rotation was introduced for, and it is the one number
+    here that the second order makes worse, by a factor of about four: a
+    reconstruction taken direction by direction has no reason to treat a
+    discontinuity at 45 degrees as well as it treats one along an axis. Every
+    other error falls by four or more.
     """
     level, tf = 8, 0.2
     left, right = (1.0, 0.0, 1.0), (0.125, 0.0, 0.1)
+    tol = TOLERANCE["sod"][order]
 
     out, stem = run_case("euler_2d", tmp_path, "sod",
-                         min_level=level, max_level=level, Tf=tf)
+                         min_level=level, max_level=level, Tf=tf, order=order)
     centers, volume, fields = read(out / stem)
     x, y = centers[:, 0], centers[:, 1]
 
@@ -157,10 +186,10 @@ def test_sod_matches_its_exact_solution(tmp_path):
     def l1(computed, exact):
         return float(np.sum(np.abs(computed - exact) * weight) / np.sum(weight))
 
-    assert l1(fields["rho"][band], rho) < 2e-2
-    assert l1(along[band], u) < 2e-2
-    assert l1(fields["pressure"][band], p) < 2e-2
-    assert np.abs(across[band]).max() < 1e-2
+    assert l1(fields["rho"][band], rho) < tol["rho"]
+    assert l1(along[band], u) < tol["u"]
+    assert l1(fields["pressure"][band], p) < tol["p"]
+    assert np.abs(across[band]).max() < tol["across"]
 
 
 @pytest.mark.parametrize("binary,dim,level,tf", [("euler_2d", 2, 9, 0.6), ("euler_1d", 1, 12, 0.6)])

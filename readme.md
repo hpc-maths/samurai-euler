@@ -77,7 +77,10 @@ The `euler_2d` executable accepts several command-line arguments to control the 
 | `--cfl`              | The CFL number                                                   | `0.4`                    |
 | `--Ti`               | Initial time                                                     | `0.0`                    |
 | `--Tf`               | Final time                                                       | `0.25`                   |
-| `--scheme`           | Finite volume scheme (`rusanov`, `hll`, `hllc`)                  | `hllc`                   |
+| `--scheme`           | Riemann solver (`rusanov`, `hll`, `hllc`)                        | `hllc`                   |
+| `--order`            | Order in space: `1` on cell averages, `2` on a MUSCL reconstruction | `1`                   |
+| `--slope-limiter`    | Slope limiter of the reconstruction (`minmod`, `vanleer`, `moncen`, `none`) | `moncen`      |
+| `--time-integrator`  | Time stepping (`auto`, `euler`, `ssprk2`, `strang`)              | `auto`                   |
 | `--test-case`        | Test case to run                                                 | `double_mach_reflection` |
 | `--gamma`            | Ratio of specific heats; overrides the value of the test case    | (test case)              |
 | `--restart-file`     | Path to a file to restart the simulation from                    | (empty)                  |
@@ -86,6 +89,34 @@ The `euler_2d` executable accepts several command-line arguments to control the 
 Run `./euler_2d --help` for the list of available test cases: it is read from
 the registry, so it always matches what the binary actually supports. `euler_3d`
 accepts the same options and exposes the cases that are defined in 3D.
+
+### Order and time stepping
+
+`--scheme` and `--order` are independent: the first says which Riemann solver
+settles an interface, the second what states it is handed. At order 1 those are
+the two cell averages; at order 2 they are values reconstructed on the face
+from a limited slope, on a stencil of four cells.
+
+`--time-integrator` says how the step is taken.
+
+| Value    | What it does                                                                    |
+| :------- | :------------------------------------------------------------------------------ |
+| `euler`  | One explicit step. At order 2 the flux also advances the face values half a step, which makes it MUSCL-Hancock. |
+| `ssprk2` | Two stages averaged (Heun).                                                      |
+| `strang` | One directional sweep at a time, X(dt/2) Y(dt) X(dt/2) in two dimensions.         |
+| `auto`   | Explicit Euler at order 1, Strang at order 2.                                     |
+
+The three are not interchangeable at order 2 in more than one dimension. The
+Hancock predictor advances a face value with the equations taken normal to that
+face, and the transverse terms it leaves out are of the same order as the ones
+it keeps, so unsplit it converges at 1.05 on the isentropic vortex. Under a
+directional sweep there is no transverse direction and the same predictor is
+exact, which is why Strang reaches 2.23 there, and SSP-RK2 2.13. In one
+dimension Strang is the single Hancock step, to the bit.
+
+`--slope-limiter none` is unlimited and oscillates at a shock. It is there to
+measure an order on a smooth solution, where every limiter clips the extremum
+and costs a fraction of an order that says nothing about the scheme.
 
 ### Multiresolution Parameters
 

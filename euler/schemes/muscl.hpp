@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <memory>
 
 #include <samurai/schemes/fv.hpp>
@@ -59,6 +60,10 @@ struct MusclOptions
 template <riemann::Solver solver, class Field, class Eos>
 auto make_muscl_scheme(Eos eos, const MusclOptions& options)
 {
+    // The predictor reads the time step through the pointer; without one it
+    // would read through null at the first interface of the first iteration.
+    assert((!options.hancock || options.dt) && "the Hancock predictor needs a time step to read");
+
     static constexpr std::size_t dim          = Field::dim;
     static constexpr std::size_t stencil_size = 4;
 

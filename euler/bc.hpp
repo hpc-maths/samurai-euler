@@ -195,6 +195,14 @@ namespace bc
     // An imposed state given by a function of the boundary cell. This is how a
     // time-dependent boundary is written: the case captures whatever it needs,
     // typically the current simulation time, by reference.
+    //
+    // NOTE that time is the one at the start of the iteration. A stage of
+    // SSP-RK2 and a sweep of Strang both re-read it, so both see t^n where the
+    // one wants t^n + dt and the other t^n + dt/2. Nothing measurable comes of
+    // it today, the only moving boundary in the repository being the analytic
+    // shock of the double Mach, whose position over one step moves by less than
+    // the error the scheme makes anyway. It is a ceiling on the order that a
+    // genuinely unsteady boundary would hit.
     template <class Field>
     auto imposed(Field& u, const typename samurai::FunctionBc<Field>::function_t& f)
     {

@@ -14,6 +14,15 @@ namespace mpi = boost::mpi;
 
 #include "variables.hpp"
 
+// The largest wave speed in the mesh, taken as the largest of |v_d| + c over
+// the cells AND over the directions, which is what the time step is built on.
+//
+// NOTE that is the one-dimensional bound. An unsplit scheme sums the flux
+// divergence of every direction into one update, and its stability limit is
+// nearer CFL / dim than CFL: at --cfl 0.4 in three dimensions, --time-integrator
+// ssprk2 is already above it, and sum_d (|v_d| + c) would be the honest
+// denominator there. A directional sweep is a one-dimensional problem and is
+// not concerned, which is one more reason for Strang to be the default.
 auto get_max_lambda(const auto& u, auto eos)
 {
     static constexpr std::size_t dim = std::decay_t<decltype(u)>::dim;
