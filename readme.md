@@ -477,6 +477,18 @@ it: the interface condition and conservation as invariants, three reference file
 for the three Riemann solvers, and the water-air tube against its exact solution
 as a slow test.
 
+Its field reference is Sod's tube and not the water-air one, for a reason worth
+knowing before adding a case of your own. A rarefaction running into a liquid at
+a gigapascal leaves, ahead of its analytic head, a foot where the density is
+1000 minus something tiny — a number built entirely by cancellation. Two hundred
+time steps later one bit of difference in a sum has grown into three parts in ten
+thousand there, and a run on another machine no longer matches: compiling the
+same source with `-ffp-contract=off` reproduces the CI runner's numbers to the
+digit. A uniform mesh is necessary for a field comparison and not sufficient —
+the case also has to be one whose answer is not built by cancellation — and the
+water-air tube is held instead to its star state, its contact and its conserved
+masses, which are.
+
 `test_validation.py` is marked slow and asserts on scalars rather than fields,
 which is what makes it usable on an adapted mesh. It measures the convergence
 order of the isentropic vortex against its exact solution, checks that
