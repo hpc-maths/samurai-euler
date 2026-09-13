@@ -17,7 +17,7 @@ import sys
 import numpy as np
 import pytest
 
-from util import ROOT, level_count, read, run_case, sedov_blast_energy
+from util import ROOT, level_count, read, run_case, run_case_with_metrics, sedov_blast_energy
 
 sys.path.insert(0, str(ROOT / "python"))
 from error_analysis import errors, exact_vortex  # noqa: E402
@@ -414,3 +414,44 @@ def test_limited_reconstruction_stays_close_to_second_order(tmp_path):
     orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
 
     assert orders[-1] > 1.8, f"L1 errors {l1}, orders {orders}"
+
+
+# ---------------------------------------------------------------------------
+# What the adaptation saves, in the units the article reports
+# ---------------------------------------------------------------------------
+SPARSITY_LEVELS = [6, 7, 8]
+
+
+def test_the_sparsity_index_falls_with_the_resolution(tmp_path):
+    """The finer the mesh, the smaller the share of it the solution needs.
+
+    This is the reading the performance table of the article turns on, and the
+    one that makes a single sparsity index meaningless on its own: what the
+    multiresolution keeps is a neighbourhood of the discontinuities, which are
+    curves in a plane, so their share of a square mesh falls as the resolution
+    rises. A sparsity index quoted without the max-level it was measured at
+    compares nothing.
+
+    Run on the reference case of the article, configuration 3 of Lax & Liu, to
+    its final time.
+    """
+    sparsity = []
+    for level in SPARSITY_LEVELS:
+        metrics, _ = run_case_with_metrics(
+            "euler_2d",
+            tmp_path / f"level{level}",
+            "lax_liu",
+            riemann_config=3,
+            min_level=3,
+            max_level=level,
+            Tf=0.8,
+            order=2,
+        )
+        assert metrics["uniform_cells"] == 4 ** level
+        sparsity.append(metrics["final_sparsity"])
+
+    assert all(b < a for a, b in zip(sparsity, sparsity[1:])), f"sparsity indices {sparsity}"
+    # Measured 92%, 83%, 69% at levels 6, 7 and 8: the threshold below is loose
+    # enough that a better or a worse adaptation still passes, and only a
+    # sparsity that has stopped following the resolution fails.
+    assert sparsity[-1] < 0.9 * sparsity[0], f"sparsity indices {sparsity}"

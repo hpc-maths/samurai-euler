@@ -159,6 +159,7 @@ and costs a fraction of an order that says nothing about the scheme.
 | `--path`     | Output directory path              | `results`                |
 | `--filename` | Output file name prefix            | `<test-case>_<scheme>`   |
 | `--nfiles`   | Number of output files to generate | `1`                      |
+| `--metrics-file` | Write the performance metrics of the run, as JSON, to this file | (none) |
 
 ### Example Usage
 
@@ -193,6 +194,111 @@ centre:
 ```bash
 ./euler_2d --test-case lax_liu --riemann-config 5 --riemann-interface 0.5 --Tf 0.3
 ```
+
+## Performance
+
+The article this repository reproduces is first of all a performance paper, and
+its tables are made of three numbers. Every run reports them:
+
+```
+performance
+  cells            17524 -> 151480 of 262144 uniform
+  sparsity index   6.68% -> 57.79%
+  cell updates     262193561 over 2672 time steps
+  time to solution 102.92 s, 28.4% of it adapting the mesh
+  throughput       2.55 Mcu/s
+```
+
+| Metric | What it is |
+| :----- | :--------- |
+| sparsity index | cells of the adapted mesh over the cells of the uniform mesh at `--max-level`, in percent. 100% is a mesh that never coarsened. Given at the initial and at the final time, as the article gives it: a Riemann problem fills its mesh up as the waves spread, and one number taken at one end would flatter or damn it. |
+| cell updates, Mcu/s | one cell advanced by one time step is one cell update; the throughput is millions of those per second over the whole run. Counted once per cell per step whatever the integrator does inside, so that the `2*dim - 1` sweeps of Strang do not read as more work done. |
+| time to solution | the time loop. The mesh adaptation is part of it and is reported apart; writing files is not, `--nfiles` being a choice of whoever runs the solver. |
+
+`--metrics-file <name>` writes the same numbers as JSON, which is what
+`python/performance.py` builds a table out of:
+
+```bash
+python python/performance.py --levels 6 7 8 9 --uniform
+```
+
+One run per resolution, on the reference case of the article — configuration 3
+of Lax & Liu, to `t_f = 0.8`, second order — gives, on one core:
+
+```
+ l_min  l_max   resolution    mr-eps    Mcu/s  time (s)    AMR           cells ti/tf    sparsity ti/tf
+     3      6         64^2   default      2.2      0.39  25.1%           1720 / 3784     42.0% / 92.4%
+     3      7        128^2   default      2.4      2.49  29.6%          3916 / 13522     23.9% / 82.5%
+     3      8        256^2   default      2.5     15.41  28.1%          8416 / 45394     12.8% / 69.3%
+     3      9        512^2   default      2.5    102.92  28.4%        17524 / 151480      6.7% / 57.8%
+     9      9        512^2   default      4.7    147.64   0.0%       262144 / 262144   100.0% / 100.0%
+```
+
+The cell counts are reproducible to the cell; the times are wall clock on one
+core and move by ten percent or so between runs, which is worth remembering
+before reading anything into a small difference.
+
+The last row is the uniform mesh at the same resolution, which is the reference
+the article puts at the bottom of its own table. Reading the two bottom rows
+together is the whole point of the exercise: **the adapted run does 2.7 times
+fewer cell updates and is 1.4 times faster**, because it runs at a little more
+than half the throughput of the uniform one. Roughly a third of what is lost is
+the adaptation itself, at 28% of the time to solution; the rest is what an
+adapted mesh costs per cell — level interfaces, prediction, intervals that are
+shorter than a uniform row.
+
+Comparing that with the table of the article takes some care, and the sparsity
+column is where it goes wrong most easily:
+
+- **Equivalent resolution is the only fair pairing.** The article varies the
+  number of cells per octree leaf at a fixed equivalent resolution of 4096²;
+  samurai carries one cell per leaf, so that axis does not exist here and the
+  table above sweeps the resolution instead. A sparsity index quoted without the
+  max-level it was measured at compares nothing: what the adaptation keeps is a
+  neighbourhood of the discontinuities, which are curves in a plane, so their
+  share of the mesh falls as the resolution rises — 92%, 83%, 69%, 58% over the
+  four rows above.
+
+- **The refinement criterion is not the same one**, and this is the real
+  difference between the two codes rather than a defect of either. The article
+  refines on a Löhner criterion, a normalised second difference thresholded at
+  `r_refine = 0.4`; samurai refines on the details of the multiresolution
+  thresholded at `--mr-eps`. The multiresolution comes with an error estimate
+  that the gradient criterion has not, and it keeps more cells for it. The
+  threshold is the knob that trades the two against each other, and `--mr-eps`
+  sweeps it:
+
+```bash
+python python/performance.py --levels 9 --mr-eps 1e-4 1e-3 1e-2
+```
+
+```
+ l_min  l_max   resolution    mr-eps    Mcu/s  time (s)    AMR           cells ti/tf    sparsity ti/tf
+     3      9        512^2     1e-04      2.3    115.04  28.5%        17524 / 151480      6.7% / 57.8%
+     3      9        512^2     1e-03      1.8     69.19  38.9%         17524 / 72616      6.7% / 27.7%
+     3      9        512^2     1e-02      1.5     58.86  43.6%         17524 / 42139      6.7% / 16.1%
+```
+
+  Two decades of threshold take the final sparsity from 58% to 16%, which is the
+  order of magnitude the article reports, and the time to solution from 115 s to
+  59 s. The initial mesh does not move at all: the details of a piecewise
+  constant state are of order one at the discontinuities and far above every
+  threshold in this range, so the three runs start from the same cells and part
+  company as the solution develops structure. **These rows say nothing about
+  accuracy**, and a large enough threshold makes any mesh sparse and any
+  solution wrong; the error of an adapted run against a uniform one is what
+  `python/error_analysis.py` measures, on the cases that have an exact solution.
+
+- **The AMR share is not measured over the same cadence.** The article runs its
+  AMR cycle once every 10 time steps and this solver adapts at every one, which
+  is most of the distance between the 28% above and the few percent it reports
+  on CPU at its nominal block size.
+
+- **Throughput is architecture, not method.** The numbers of the article are
+  measured on 72 ARM cores or on a Hopper GPU, against one core here, and its
+  solver works on blocks of 16² cells where this one works on intervals. The
+  column worth comparing is the sparsity index; the Mcu/s column is worth
+  comparing against *itself*, between two runs of this solver.
 
 ## Tests
 

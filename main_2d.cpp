@@ -17,6 +17,7 @@
 #include "euler/config.hpp"
 #include "euler/eos.hpp"
 #include "euler/init/cases.hpp"
+#include "euler/metrics.hpp"
 #include "euler/prediction.hpp"
 #include "euler/save.hpp"
 #include "euler/reconstruction.hpp"
@@ -117,6 +118,7 @@ int main(int argc, char* argv[])
     fs::path path = "results";
     std::string filename;
     std::size_t nfiles = 1;
+    std::string metrics_file;
 
     auto available = test_case::TestCaseRegistry<field_t>::instance().available_test_cases();
 
@@ -148,6 +150,7 @@ int main(int argc, char* argv[])
     app.add_option("--path", path, "Output path")->capture_default_str()->group("Output");
     app.add_option("--filename", filename, "File name prefix (defaults to <test-case>_<scheme>)")->group("Output");
     app.add_option("--nfiles", nfiles, "Number of output files")->capture_default_str()->group("Output");
+    app.add_option("--metrics-file", metrics_file, "Write the performance metrics of the run, as JSON, to this file")->group("Output");
 
     // The cases that take a parameter of their own declare it here, before the
     // parse. All of them do, not only the selected one: which case runs is
@@ -290,13 +293,22 @@ int main(int argc, char* argv[])
             return make_second_order_scheme<decltype(u)>(scheme, eos, options);
         });
 
+    // The three numbers the article reports per run, measured here rather than
+    // reconstructed afterwards from a log: see euler/metrics.hpp.
+    Metrics metrics(mesh);
+
     samurai::times::timers.start("TimeLoop");
+    metrics.start(mesh);
     bool done = false;
     while (!done)
     {
         double dt = cfl * dx / get_max_lambda(u, eos);
 
-        MRadaptation(mra_config);
+        metrics.adapt(
+            [&]
+            {
+                MRadaptation(mra_config);
+            });
 
         if (check_positivity)
         {
@@ -316,6 +328,8 @@ int main(int argc, char* argv[])
         }
         std::cout << fmt::format("iteration {}: t = {}, dt = {}", nt++, t, dt) << "\r";
 
+        metrics.step(mesh);
+
         if (order == 1)
         {
             advance(u, unp1, unp2, first_order, first_order_sweeps, dt_for_flux, dt, integrator);
@@ -330,11 +344,20 @@ int main(int argc, char* argv[])
         if (t >= static_cast<double>(nsave + 1) * dt_save || t == Tf)
         {
             const std::string suffix = (nfiles != 1) ? fmt::format("_ite_{}", nsave++) : "";
-            save(path.string(), fmt::format("{}{}", filename, suffix), u, eos);
-            samurai::dump(path, fmt::format("{}_restart{}", filename, suffix), mesh, u);
+            // Writing is not part of the time to solution: how many files a run
+            // produces is a choice of the person running it.
+            metrics.output(
+                [&]
+                {
+                    save(path.string(), fmt::format("{}{}", filename, suffix), u, eos);
+                    samurai::dump(path, fmt::format("{}_restart{}", filename, suffix), mesh, u);
+                });
         }
     }
+    metrics.stop(mesh);
     samurai::times::timers.stop("TimeLoop");
+
+    metrics.report(metrics_file);
 
     samurai::finalize();
     return 0;
