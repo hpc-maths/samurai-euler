@@ -19,8 +19,10 @@
 //  runs, and the reference the second-order scheme is compared against.
 // =============================================================================
 
+// `direction` restricts the scheme to one direction, for a directional sweep;
+// -1 keeps all of them.
 template <riemann::Solver solver, class Field, class Eos>
-auto make_godunov_scheme(Eos eos)
+auto make_godunov_scheme(Eos eos, int direction = -1)
 {
     static constexpr std::size_t dim          = Field::dim;
     static constexpr std::size_t stencil_size = 2;
@@ -33,6 +35,11 @@ auto make_godunov_scheme(Eos eos)
         [&](auto _d)
         {
             static constexpr std::size_t d = _d();
+
+            if (direction >= 0 && d != static_cast<std::size_t>(direction))
+            {
+                return;
+            }
 
             godunov[d].cons_flux_function =
                 [eos](samurai::FluxValue<cfg>& flux, const samurai::StencilData<cfg>& /*data*/, const samurai::StencilValues<cfg>& field)

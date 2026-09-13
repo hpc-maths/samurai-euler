@@ -225,9 +225,16 @@ MIN_SECOND_ORDER = 1.9
 PULSE_LEVELS = [8, 9, 10]
 
 
-def test_vortex_reaches_second_order(tmp_path):
-    """Two dimensions, uniform mesh. This is the exit criterion of the lot."""
-    l1 = [vortex_error(tmp_path / f"level{level}", level, **SECOND_ORDER)[0] for level in LEVELS]
+@pytest.mark.parametrize("integrator", ["ssprk2", "strang"])
+def test_vortex_reaches_second_order(integrator, tmp_path):
+    """Two dimensions, uniform mesh. This is the exit criterion of the lot.
+
+    Both integrators that reach second order in more than one dimension are
+    held to it. The third, `euler`, is second order only in one dimension, and
+    is measured there instead.
+    """
+    l1 = [vortex_error(tmp_path / f"level{level}", level, time_integrator=integrator, **SECOND_ORDER)[0]
+          for level in LEVELS]
     orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
 
     assert orders[-1] > MIN_SECOND_ORDER, f"L1 errors {l1}, orders {orders}"
@@ -247,6 +254,7 @@ def test_second_order_survives_adaptation(tmp_path):
             level,
             min_level=level - 2,
             mr_eps=1e-3 * 4.0 ** -(level - LEVELS[0]),
+            time_integrator="strang",
             **SECOND_ORDER,
         )[0]
         for level in LEVELS

@@ -64,7 +64,7 @@ int main(int argc, char* argv[])
         ->group("Simulation parameters");
     app.add_option("--time-integrator", time_integrator, "Time integration")
         ->capture_default_str()
-        ->check(CLI::IsMember({"auto", "euler", "ssprk2"}))
+        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang"}))
         ->group("Simulation parameters");
     app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
     auto* gamma_opt = app.add_option("--gamma", gamma, "Ratio of specific heats (defaults to the value of the test case)")
@@ -160,14 +160,39 @@ int main(int argc, char* argv[])
     // Hancock predictor reads the current one through this.
     auto dt_for_flux = std::make_shared<double>(0.);
 
-    const MusclOptions muscl_options{.limiter = slope_limiter_from_name(slope_limiter),
-                                     .hancock = integrator == TimeIntegrator::euler,
-                                     .dt      = dt_for_flux};
+    // The Hancock predictor belongs to the single-step integrators: with SSP-RK2
+    // the second order comes from the stages instead, and tracing as well would
+    // count it twice.
+    MusclOptions muscl_options{.limiter = slope_limiter_from_name(slope_limiter),
+                               .hancock = integrator != TimeIntegrator::ssprk2,
+                               .dt      = dt_for_flux};
 
     // Both orders are built, and the one the time loop uses is chosen per step.
     // They are different types, a wider stencil being a different scheme.
     auto first_order  = make_first_order_scheme<decltype(u)>(scheme, eos);
     auto second_order = make_second_order_scheme<decltype(u)>(scheme, eos, muscl_options);
+
+    // The same two, restricted to one direction each, for Strang.
+    auto directional = [&](auto&& make_one)
+    {
+        return [&]<std::size_t... D>(std::index_sequence<D...>)
+        {
+            return std::array{make_one(static_cast<int>(D))...};
+        }(std::make_index_sequence<dim>{});
+    };
+
+    auto first_order_sweeps = directional(
+        [&](int d)
+        {
+            return make_first_order_scheme<decltype(u)>(scheme, eos, d);
+        });
+    auto second_order_sweeps = directional(
+        [&](int d)
+        {
+            auto options      = muscl_options;
+            options.direction = d;
+            return make_second_order_scheme<decltype(u)>(scheme, eos, options);
+        });
 
     auto MRadaptation = samurai::make_MRAdapt(u);
     auto mra_config   = samurai::mra_config().relative_detail(true);
@@ -193,14 +218,13 @@ int main(int argc, char* argv[])
 
         std::cout << fmt::format("iteration {}: t = {}, dt = {}", nt++, t, dt) << std::endl;
 
-        *dt_for_flux = dt;
         if (order == 1)
         {
-            advance(u, unp1, unp2, first_order, dt, integrator);
+            advance(u, unp1, unp2, first_order, first_order_sweeps, dt_for_flux, dt, integrator);
         }
         else
         {
-            advance(u, unp1, unp2, second_order, dt, integrator);
+            advance(u, unp1, unp2, second_order, second_order_sweeps, dt_for_flux, dt, integrator);
         }
 
         if (t >= static_cast<double>(nsave + 1) * dt_save || t == Tf)

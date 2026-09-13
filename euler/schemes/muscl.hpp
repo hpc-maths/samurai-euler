@@ -48,6 +48,12 @@ struct MusclOptions
     // and called with a different dt at every iteration, so it reads the value
     // through this pointer rather than capturing it.
     std::shared_ptr<const double> dt;
+
+    // Restrict the scheme to one direction, for a directional sweep. Every
+    // other direction is left without a flux function, which samurai skips
+    // entirely, so a sweep costs one pass and not dim of them. -1 keeps all of
+    // them, which is the unsplit scheme.
+    int direction = -1;
 };
 
 template <riemann::Solver solver, class Field, class Eos>
@@ -64,6 +70,11 @@ auto make_muscl_scheme(Eos eos, const MusclOptions& options)
         [&](auto _d)
         {
             static constexpr std::size_t d = _d();
+
+            if (options.direction >= 0 && d != static_cast<std::size_t>(options.direction))
+            {
+                return;
+            }
 
             muscl[d].cons_flux_function =
                 [eos, options](samurai::FluxValue<cfg>& flux, const samurai::StencilData<cfg>& data, const samurai::StencilValues<cfg>& field)

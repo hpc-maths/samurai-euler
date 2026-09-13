@@ -62,6 +62,25 @@ def test_free_stream_across_level_interfaces(binary, level, order, tmp_path):
     assert np.abs(fields["velocity"] - 1.0).max() < 1e-14
 
 
+def test_strang_is_a_single_sweep_in_one_dimension(tmp_path):
+    """With one direction to sweep, Strang splitting is the Hancock step itself.
+
+    Not an approximation of it: half a step along nothing, then the whole step
+    along x, then nothing again. The two runs have to agree bit for bit, which
+    makes this the cheapest check that the sweep machinery does not disturb
+    what it wraps.
+    """
+    runs = {}
+    for integrator in ("euler", "strang"):
+        out, stem = run_case("euler_1d", tmp_path / integrator, "advected_pulse",
+                             min_level=9, max_level=9, Tf=0.05,
+                             order=2, time_integrator=integrator)
+        _, _, runs[integrator] = read(out / stem)
+
+    for name in ("rho", "pressure", "velocity"):
+        np.testing.assert_array_equal(runs["euler"][name], runs["strang"][name])
+
+
 @pytest.mark.parametrize("order", ORDERS)
 @pytest.mark.parametrize(
     "binary,case,level",

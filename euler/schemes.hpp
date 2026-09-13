@@ -26,16 +26,16 @@
 // =============================================================================
 
 template <class Field, class Eos>
-auto make_first_order_scheme(const std::string& name, Eos eos)
+auto make_first_order_scheme(const std::string& name, Eos eos, int direction = -1)
 {
     switch (riemann::from_name(name))
     {
         case riemann::Solver::rusanov:
-            return make_godunov_scheme<riemann::Solver::rusanov, Field>(eos);
+            return make_godunov_scheme<riemann::Solver::rusanov, Field>(eos, direction);
         case riemann::Solver::hll:
-            return make_godunov_scheme<riemann::Solver::hll, Field>(eos);
+            return make_godunov_scheme<riemann::Solver::hll, Field>(eos, direction);
         default:
-            return make_godunov_scheme<riemann::Solver::hllc, Field>(eos);
+            return make_godunov_scheme<riemann::Solver::hllc, Field>(eos, direction);
     }
 }
 
