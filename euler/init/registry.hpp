@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include <CLI/CLI.hpp>
 #include <samurai/box.hpp>
 
 #include "../config.hpp"
@@ -20,7 +21,9 @@
 // -----------------------------------------------------------------------------
 //  A test case is the four things main() needs in order to set a simulation up
 //  and that main() cannot guess: where the domain is, what the initial state is,
-//  how the boundaries behave, and which gas is being modelled.
+//  how the boundaries behave, and which gas is being modelled. A case that comes
+//  in variants, such as the nineteen configurations of a two-dimensional Riemann
+//  problem, adds a fifth: the command line option that picks one.
 //
 //  The registry is templated on the *field* rather than fixed to 2D, so the same
 //  case can serve euler_2d and euler_3d when its definition is dimension
@@ -54,6 +57,12 @@ namespace test_case
     template <class Field, class Eos>
     using BCFunc = std::function<void(Field&, double&, Eos)>;
 
+    // Command line options a case adds for itself. A parameterised case cannot
+    // read its parameter at registration, which happens before main() parses
+    // anything, so it hands over a function that declares the option and keeps
+    // the variable the parser writes into.
+    using OptionsFunc = std::function<void(CLI::App&)>;
+
     template <class Field, class Eos = EOS::IdealGas>
     struct TestCase
     {
@@ -67,6 +76,9 @@ namespace test_case
         // Periodicity per axis. Set on the mesh, not on the field: samurai wraps
         // the ghost update rather than attaching a boundary condition.
         std::array<bool, Field::dim> periodic = {};
+
+        // Options this case adds to the command line, if it takes any.
+        OptionsFunc options = nullptr;
     };
 
     template <class Field, class Eos = EOS::IdealGas>
@@ -95,6 +107,35 @@ namespace test_case
                 throw std::runtime_error("Test case '" + name + "' not found");
             }
             return it->second;
+        }
+
+        // Declares the options of every registered case into main()'s parser.
+        //
+        // Every case, not only the selected one: --test-case is itself an option
+        // and is not known until the parse is over. So two cases must not ask
+        // for the same option name, and the convention that keeps them apart is
+        // to name the option after the case. A collision is caught here rather
+        // than left to CLI11, which knows the name of the option but not which
+        // cases are fighting over it.
+        void add_options(CLI::App& app) const
+        {
+            for (const auto& [name, test_case] : test_cases_)
+            {
+                if (!test_case.options)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    test_case.options(app);
+                }
+                catch (const CLI::OptionAlreadyAdded& e)
+                {
+                    throw std::runtime_error("test case '" + name + "' declares an option another case already declared (" + e.what()
+                                             + "); name a case option after its case");
+                }
+            }
         }
 
         std::vector<std::string> available_test_cases() const

@@ -124,6 +124,12 @@ TOLERANCE = {
         1: dict(rho=2e-2, u=2e-2, p=2e-2, across=5e-3),
         2: dict(rho=4e-3, u=5e-3, p=3e-3, across=1.5e-2),
     },
+    # Sod along x, 4096 cells, t = 0.2
+    "sod_x": {
+        #        L1 rho   L1 u    L1 p    wave positions, in fine cells
+        1: dict(rho=3e-3, u=3e-3, p=2e-3, cells=4),
+        2: dict(rho=4e-4, u=5e-4, p=2e-4, cells=2),
+    },
 }
 
 
@@ -192,6 +198,68 @@ def test_sod_matches_its_exact_solution(order, tmp_path):
     assert np.abs(across[band]).max() < tol["across"]
 
 
+def _outermost_above(x, rho, level):
+    """Rightmost point where the density is still above `level`.
+
+    Applied to the computed and to the exact profile alike, so what it returns
+    is the position of a jump measured the same way on both, whatever it does
+    to a smeared front.
+    """
+    return x[rho > level].max()
+
+
+@pytest.mark.parametrize("order", ORDERS)
+def test_sod_x_matches_its_exact_solution(order, tmp_path):
+    """Sod's tube along x, the layout the article runs, against the exact solution.
+
+    Nothing is projected here, unlike the rotated variant above, so this is the
+    measurement to read: the L1 errors fall by about eight between the orders,
+    against four for a first-order to second-order step on a smooth solution,
+    the difference being that the second order also puts the contact on fewer
+    cells.
+
+    The two discontinuities are located as well, which the norms do not do: an
+    error of one cell on the shock position is worth less than a thousandth of
+    an L1 norm, and a wrong wave speed is a wrong equation of state or a wrong
+    Riemann solver, not a coarse mesh. The tolerance is in fine cells and is
+    looser at order 1 for the contact alone: a contact carries no pressure
+    signal, nothing steepens it, and at order 1 it is smeared over enough cells
+    that the middle of the smear is only good to two of them.
+    """
+    level, tf = 12, 0.2
+    left, right = (1.0, 0.0, 1.0), (0.125, 0.0, 0.1)
+    tol = TOLERANCE["sod_x"][order]
+
+    out, stem = run_case("euler_1d", tmp_path, "sod_x",
+                         min_level=level, max_level=level, Tf=tf, order=order)
+    centers, volume, fields = read(out / stem)
+    x = centers[:, 0]
+    rho, u, p = exact_riemann_solution(x, tf, left, right, x0=0.5)
+
+    def l1(computed, exact):
+        return float(np.sum(np.abs(computed - exact) * volume) / np.sum(volume))
+
+    assert l1(fields["rho"], rho) < tol["rho"]
+    assert l1(fields["velocity"][:, 0], u) < tol["u"]
+    assert l1(fields["pressure"], p) < tol["p"]
+
+    # One point inside each of the three plateaux the waves separate at t = 0.2:
+    # behind the contact, between the contact and the shock, ahead of the shock.
+    # Halfway between two of them is a level only the jump between them crosses.
+    plateau, _, _ = exact_riemann_solution(np.array([0.6, 0.75, 0.95]), tf, left, right, x0=0.5)
+    contact_level = 0.5 * (plateau[0] + plateau[1])
+    shock_level = 0.5 * (plateau[1] + plateau[2])
+
+    dx = volume.min()
+    for name, level_ in (("contact", contact_level), ("shock", shock_level)):
+        computed = _outermost_above(x, fields["rho"], level_)
+        expected = _outermost_above(x, rho, level_)
+        assert abs(computed - expected) <= tol["cells"] * dx, (
+            f"{name} at {computed:.5f}, exact solution at {expected:.5f}, "
+            f"{abs(computed - expected) / dx:.1f} cells apart"
+        )
+
+
 @pytest.mark.parametrize("binary,dim,level,tf", [("euler_2d", 2, 9, 0.6), ("euler_1d", 1, 12, 0.6)])
 def test_sedov_shock_sits_where_the_similarity_solution_puts_it(binary, dim, level, tf, tmp_path):
     """The blast energy is only meaningful through the shock radius it produces.
@@ -213,18 +281,24 @@ def test_sedov_shock_sits_where_the_similarity_solution_puts_it(binary, dim, lev
     assert abs(front / expected - 1.0) < 0.1, f"shock at {front:.4f}, similarity solution at {expected:.4f}"
 
 
-@pytest.mark.parametrize("case", ["riemann2d_config3", "riemann2d_config4", "riemann2d_config12"])
-def test_riemann_2d_keeps_the_symmetry_of_its_configuration(case, tmp_path):
-    """Lax & Liu configurations 3, 4 and 12 are symmetric about the diagonal.
+# The six configurations of the table whose initial data is invariant under the
+# reflection about the diagonal, (x,y,u,v) -> (y,x,v,u). The other thirteen are
+# not, and nothing as cheap holds them to their published states.
+SYMMETRIC_CONFIGS = [2, 3, 4, 7, 8, 12]
 
-    Their initial data is invariant under (x,y,u,v) -> (y,x,v,u), so the solution
+
+@pytest.mark.parametrize("config", SYMMETRIC_CONFIGS)
+def test_riemann_2d_keeps_the_symmetry_of_its_configuration(config, tmp_path):
+    """A configuration symmetric about the diagonal must stay symmetric.
+
+    Its initial data is invariant under (x,y,u,v) -> (y,x,v,u), so the solution
     is too, and a uniform mesh carries that symmetry exactly. It is the cheapest
     check that the states were copied correctly: a single mistyped digit in one
     quadrant breaks it, while leaving a picture that still looks plausible.
     """
     level, tf = 7, 0.2
-    out, stem = run_case("euler_2d", tmp_path, case,
-                         min_level=level, max_level=level, Tf=tf)
+    out, stem = run_case("euler_2d", tmp_path, "lax_liu", label=f"lax_liu{config}",
+                         riemann_config=config, min_level=level, max_level=level, Tf=tf)
     centers, _, fields = read(out / stem)
 
     n = int(round(np.sqrt(centers.shape[0])))

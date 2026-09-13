@@ -89,7 +89,10 @@ def test_strang_is_a_single_sweep_in_one_dimension(tmp_path):
         ("euler_1d", "sedov_blast", 8),
         ("euler_2d", "sedov_blast", 6),
         ("euler_2d", "double_mach_reflection", 6),
-        ("euler_3d", "sedov_blast", 4),
+        # level 5, not 4: at level 4 no cell centre falls inside the blast in
+        # three dimensions, and the case is then a uniform gas at rest, whose
+        # positivity says nothing about the scheme.
+        ("euler_3d", "sedov_blast", 5),
     ],
 )
 def test_density_and_pressure_stay_positive(binary, case, level, order, tmp_path):
@@ -151,6 +154,56 @@ def test_closed_box_conserves_mass_and_energy(tmp_path):
 
     assert abs(after["mass"] - before["mass"]) / before["mass"] < 1e-12
     assert abs(after["energy"] - before["energy"]) / before["energy"] < 1e-12
+    # and the solution did move, otherwise conservation is trivial
+    assert np.abs(fields_1["rho"] - fields_0["rho"]).max() > 1e-3
+
+
+@pytest.mark.parametrize("interface", [0.5, 0.8])
+def test_riemann_interface_sits_where_it_is_asked_to(interface, tmp_path):
+    """`--riemann-interface` moves the corner the four quadrants meet at.
+
+    0.8 is the default, the position the article uses; 0.5 is the convention of
+    the papers that classify the configurations. The upper right quadrant of
+    configuration 3 is the only one at density 1.5, so counting its cells says
+    exactly where the corner landed, with no tolerance needed on a uniform mesh.
+    """
+    level = 6
+    out, stem = run_case("euler_2d", tmp_path, "lax_liu", riemann_config=3,
+                         riemann_interface=interface, min_level=level, max_level=level, Tf=0.002)
+    _, _, fields = read(out / f"{stem}_init")
+
+    n = 2**level
+    across = sum(1 for i in range(n) if (i + 0.5) / n >= interface)
+    assert (fields["rho"] == 1.5).sum() == across * across
+
+
+def test_periodic_box_conserves_mass_energy_and_momentum(tmp_path):
+    """A periodic box has no boundary at all, so nothing can leave it.
+
+    The closed box above conserves through the reflective wall; here the ghost
+    cells are filled by samurai's periodic update instead, which is different
+    code, and momentum is conserved as well, which a wall does not conserve.
+
+    It also pins the gas. The total energy is reconstructed here from the
+    pressure at gamma = 5/3, the value blast_periodic declares; the solver
+    conserves the energy it computed with its own gamma, and the two agree only
+    if they are the same gamma. Run the case at 1.4 and this test fails by
+    several percent, which makes it the check that --gamma and the equation of
+    state carried by a test case are really data.
+    """
+    gamma = 5.0 / 3.0
+
+    out, stem = run_case("euler_2d", tmp_path, "blast_periodic", min_level=6, max_level=6, Tf=0.05)
+    _, volume_0, fields_0 = read(out / f"{stem}_init")
+    _, volume_1, fields_1 = read(out / stem)
+
+    before = conservative(volume_0, fields_0, gamma)
+    after = conservative(volume_1, fields_1, gamma)
+
+    assert abs(after["mass"] - before["mass"]) / before["mass"] < 1e-12
+    assert abs(after["energy"] - before["energy"]) / before["energy"] < 1e-12
+    # the gas starts at rest and the box is symmetric, so momentum stays at zero
+    assert np.abs(after["momentum"]).max() < 1e-12 * before["mass"]
     # and the solution did move, otherwise conservation is trivial
     assert np.abs(fields_1["rho"] - fields_0["rho"]).max() > 1e-3
 

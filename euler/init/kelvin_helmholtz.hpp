@@ -32,9 +32,11 @@
 //  compared to a published one:
 //
 //    - gamma is 1.4 here against 5/3 there, so that the case shares the
-//      equation of state of every other case in this repository;
-//    - the boundaries are outflow rather than periodic, periodicity not being
-//      wired through the mesh configuration yet.
+//      equation of state of most other cases in this repository;
+//    - the boundaries are outflow rather than periodic. The registry carries
+//      periodicity per axis and blast_periodic uses it, so this departure could
+//      be closed; it has not been, because closing it moves the reference this
+//      case is held to and tests nothing the periodic blast does not.
 //
 //  The interface is a discontinuity, which makes the growth of the billows
 //  depend on the resolution rather than converge to one answer:

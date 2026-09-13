@@ -9,12 +9,14 @@
 // own header.
 
 #include "advected_pulse.hpp"
+#include "blast_periodic.hpp"
 #include "closed_box.hpp"
 #include "double_mach.hpp"
 #include "double_rarefaction.hpp"
 #include "free_stream.hpp"
 #include "isentropic_vortex.hpp"
 #include "kelvin_helmholtz.hpp"
-#include "riemann_2d.hpp"
+#include "lax_liu.hpp"
 #include "sedov_blast.hpp"
 #include "sod.hpp"
+#include "triple_point.hpp"

@@ -74,6 +74,11 @@ int main(int argc, char* argv[])
     app.add_option("--filename", filename, "File name prefix (defaults to <test-case>_<scheme>)")->group("Output");
     app.add_option("--nfiles", nfiles, "Number of output files")->capture_default_str()->group("Output");
 
+    // The cases that take a parameter of their own declare it here, before the
+    // parse. All of them do, not only the selected one: which case runs is
+    // itself decided by the parse.
+    test_case::TestCaseRegistry<field_t>::instance().add_options(app);
+
     SAMURAI_PARSE(argc, argv);
 
     std::cout << "Samurai version: " << SAMURAI_VERSION << std::endl; // Print Samurai version info
