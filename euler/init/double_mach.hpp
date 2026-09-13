@@ -67,36 +67,78 @@ namespace test_case::double_mach_reflection
         }
     }
 
+    // The bottom boundary is two conditions in one: upstream of the ramp foot
+    // the post-shock state flows in, downstream of it the boundary is a wall.
+    // Expressing that as two conditions restricted by coordinates is what
+    // samurai's CoordsRegion is for, but that path throws on this non-square
+    // domain, so the two live in one condition here.
+    //
+    // It is a condition rather than a value function because a value function
+    // is handed one cell and produces one value, which every ghost layer then
+    // repeats. A wall is a mirror: the k-th ghost reflects the k-th cell
+    // inside, so with a single value the second layer of a MUSCL stencil would
+    // carry the reflection of the first cell instead of the second. The
+    // reconstruction would then read a zero slope in the ghost, and the wall
+    // would fall back to first order along the stretch where the jet runs.
+    template <std::size_t StencilSize, class Field>
+    struct RampBottomImpl : public samurai::Bc<Field>
+    {
+        INIT_BC(RampBottomImpl, StencilSize)
+
+        apply_function_t get_apply_function(constant_stencil_size_t, const direction_t&) const override
+        {
+            return [](Field& u, const stencil_cells_t& cells, const value_t& inflow)
+            {
+                static constexpr std::size_t ghost0 = StencilSize / 2;
+
+                if (cells[ghost0 - 1].center(0) < x0)
+                {
+                    for (std::size_t i = ghost0; i < StencilSize; ++i)
+                    {
+                        u[cells[i]] = inflow;
+                    }
+                    return;
+                }
+
+                for (std::size_t k = 0; k < ghost0; ++k)
+                {
+                    const auto& inside = cells[ghost0 - 1 - k];
+                    const auto& ghost  = cells[ghost0 + k];
+
+                    u[ghost]                                  = u[inside];
+                    u[ghost][EulerLayout<Field::dim>::mom(1)] = -u[inside][EulerLayout<Field::dim>::mom(1)];
+                }
+            };
+        }
+    };
+
+    template <std::size_t StencilSize = 2>
+    struct RampBottom
+    {
+        template <class Field>
+        using impl_t = RampBottomImpl<StencilSize, Field>;
+    };
+
     inline void bc_fn(field_t& u, double& t, EOS::IdealGas eos)
     {
         static constexpr std::size_t dim = field_t::dim;
-        using EulerConsVar               = EulerLayout<dim>;
 
         const xt::xtensor_fixed<int, xt::xshape<dim>> bottom = {0, -1};
         const xt::xtensor_fixed<int, xt::xshape<dim>> top    = {0, 1};
         const xt::xtensor_fixed<int, xt::xshape<dim>> right  = {1, 0};
         const xt::xtensor_fixed<int, xt::xshape<dim>> left   = {-1, 0};
 
-        // Bottom: post-shock state upstream of the ramp foot, reflecting wall
-        // downstream of it. This one stays a value function: expressing it as two
-        // conditions restricted by coordinates is what samurai's CoordsRegion is
-        // for, but that path throws on this non-square domain.
-        bc::imposed(u,
-                    [&u, eos](const auto&, const auto& cell, const auto&)
-                    {
-                        if (cell.center(0) < x0)
-                        {
-                            return prim2cons<2>(left_state, eos);
-                        }
-                        else
-                        {
-                            return xt::xtensor_fixed<double, xt::xshape<dim + 2>>{u[cell][EulerConsVar::rho],
-                                                                                  u[cell][EulerConsVar::rhoE],
-                                                                                  u[cell][EulerConsVar::mom(0)],
-                                                                                  -u[cell][EulerConsVar::mom(1)]};
-                        }
-                    })
-            ->on(bottom);
+        // Bottom: the post-shock state upstream of the ramp foot, a wall
+        // downstream of it, at the width the scheme reads.
+        const auto inflow = prim2cons<2>(left_state, eos);
+        if (bc::wide())
+        {
+            samurai::make_bc<RampBottom<4>>(u, inflow[0], inflow[1], inflow[2], inflow[3])->on(bottom);
+        }
+        else
+        {
+            samurai::make_bc<RampBottom<2>>(u, inflow[0], inflow[1], inflow[2], inflow[3])->on(bottom);
+        }
 
         // Top: follows the analytic shock position, hence the dependence on t.
         bc::imposed(u,

@@ -4,6 +4,7 @@
 #include <numbers>
 
 #include <cassert>
+#include <memory>
 #include <samurai/algorithm/update.hpp>
 #include <samurai/field.hpp>
 #include <samurai/io/hdf5.hpp>
@@ -18,7 +19,9 @@
 #include "euler/init/cases.hpp"
 #include "euler/prediction.hpp"
 #include "euler/save.hpp"
+#include "euler/reconstruction.hpp"
 #include "euler/schemes.hpp"
+#include "euler/time_stepping.hpp"
 #include "euler/utils.hpp"
 #include "euler/variables.hpp"
 
@@ -101,6 +104,9 @@ int main(int argc, char* argv[])
     double cfl = 0.4;
     double t   = 0.;
     std::string restart_file;
+    std::size_t order = 1;
+    std::string slope_limiter   = "moncen";
+    std::string time_integrator = "auto";
     std::string scheme    = "hllc";
     std::string test_case = "double_mach_reflection";
     double gamma          = 0.; // only used when --gamma is given
@@ -120,6 +126,18 @@ int main(int argc, char* argv[])
     app.add_option("--scheme", scheme, "Finite volume scheme")
         ->capture_default_str()
         ->check(CLI::IsMember({"rusanov", "hll", "hllc"}))
+        ->group("Simulation parameters");
+    app.add_option("--order", order, "Order of the scheme in space: 1 for cell averages, 2 for a MUSCL reconstruction")
+        ->capture_default_str()
+        ->check(CLI::IsMember({1, 2}))
+        ->group("Simulation parameters");
+    app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"none", "minmod", "vanleer", "moncen"}))
+        ->group("Simulation parameters");
+    app.add_option("--time-integrator", time_integrator, "Time integration")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang"}))
         ->group("Simulation parameters");
     app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
     auto* gamma_opt = app.add_option("--gamma", gamma, "Ratio of specific heats (defaults to the value of the test case)")
@@ -143,6 +161,15 @@ int main(int argc, char* argv[])
         eos.gamma = gamma;
     }
     std::cout << "Using gamma = " << eos.gamma << std::endl;
+
+    // The default integrator follows the order: explicit Euler is all a
+    // first-order flux can use, and SSP-RK2 is the one that reaches second
+    // order in every dimension. Naming one explicitly always wins.
+    if (time_integrator == "auto")
+    {
+        time_integrator = default_time_integrator(order);
+    }
+    const auto integrator = time_integrator_from_name(time_integrator);
 
     if (filename.empty())
     {
@@ -193,9 +220,20 @@ int main(int argc, char* argv[])
     {
         samurai::load(restart_file, mesh, u);
     }
+    // A MUSCL reconstruction reads two layers of ghost cells where the
+    // first-order flux reads one, so the boundary conditions are built to the
+    // width the scheme asks for.
+    bc::ghost_layers() = order;
     init_bc(u, t, test_case, eos);
 
     auto unp1 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
+    auto unp2 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
+
+    // SSP-RK2 evaluates the scheme on an intermediate state, and evaluating a
+    // scheme fills the ghost cells: the scratch fields need the same boundary
+    // conditions as the solution itself.
+    unp1.copy_bc_from(u);
+    unp2.copy_bc_from(u);
 
     double dx            = mesh.cell_length(config.max_level());
     const double dt_save = Tf / static_cast<double>(nfiles);
@@ -207,8 +245,45 @@ int main(int argc, char* argv[])
     // writes primitives for post-processing and cannot be read back.
     samurai::dump(path, fmt::format("{}_restart_init", filename), mesh, u);
 
-    std::cout << "Using scheme: " << scheme << std::endl;
-    auto fv_scheme = get_fv_scheme<decltype(u)>(scheme, eos);
+    std::cout << fmt::format("Using scheme: {}, order {}, {} in time", scheme, order, time_integrator) << std::endl;
+
+    // Built once, called with a different time step at every iteration: the
+    // Hancock predictor reads the current one through this.
+    auto dt_for_flux = std::make_shared<double>(0.);
+
+    // The Hancock predictor belongs to the single-step integrators: with SSP-RK2
+    // the second order comes from the stages instead, and tracing as well would
+    // count it twice.
+    MusclOptions muscl_options{.limiter = slope_limiter_from_name(slope_limiter),
+                               .hancock = integrator != TimeIntegrator::ssprk2,
+                               .dt      = dt_for_flux};
+
+    // Both orders are built, and the one the time loop uses is chosen per step.
+    // They are different types, a wider stencil being a different scheme.
+    auto first_order  = make_first_order_scheme<decltype(u)>(scheme, eos);
+    auto second_order = make_second_order_scheme<decltype(u)>(scheme, eos, muscl_options);
+
+    // The same two, restricted to one direction each, for Strang.
+    auto directional = [&](auto&& make_one)
+    {
+        return [&]<std::size_t... D>(std::index_sequence<D...>)
+        {
+            return std::array{make_one(static_cast<int>(D))...};
+        }(std::make_index_sequence<dim>{});
+    };
+
+    auto first_order_sweeps = directional(
+        [&](int d)
+        {
+            return make_first_order_scheme<decltype(u)>(scheme, eos, d);
+        });
+    auto second_order_sweeps = directional(
+        [&](int d)
+        {
+            auto options      = muscl_options;
+            options.direction = d;
+            return make_second_order_scheme<decltype(u)>(scheme, eos, options);
+        });
 
     samurai::times::timers.start("TimeLoop");
     bool done = false;
@@ -236,10 +311,14 @@ int main(int argc, char* argv[])
         }
         std::cout << fmt::format("iteration {}: t = {}, dt = {}", nt++, t, dt) << "\r";
 
-        unp1.resize();
-        unp1 = u - dt * fv_scheme(u);
-
-        samurai::swap(u, unp1);
+        if (order == 1)
+        {
+            advance(u, unp1, unp2, first_order, first_order_sweeps, dt_for_flux, dt, integrator);
+        }
+        else
+        {
+            advance(u, unp1, unp2, second_order, second_order_sweeps, dt_for_flux, dt, integrator);
+        }
 
         t += dt;
 

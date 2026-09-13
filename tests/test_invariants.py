@@ -15,11 +15,17 @@ from util import conservative, level_count, read, run_case
 # Resolutions chosen so that each test runs in a few seconds.
 DIMENSIONS = [("euler_1d", 8), ("euler_2d", 6), ("euler_3d", 4)]
 
+# Both orders are held to the same invariants. The second one is where they
+# bite: a MUSCL reconstruction reads a second layer of ghost cells and takes
+# slopes across level jumps, which is two more ways to break a uniform state.
+ORDERS = [1, 2]
 
+
+@pytest.mark.parametrize("order", ORDERS)
 @pytest.mark.parametrize("binary,level", DIMENSIONS)
-def test_free_stream_stays_uniform(binary, level, tmp_path):
+def test_free_stream_stays_uniform(binary, level, order, tmp_path):
     """A uniform flow is an exact solution: it must not move at all."""
-    out, stem = run_case(binary, tmp_path, "free_stream", min_level=level, max_level=level, Tf=0.05)
+    out, stem = run_case(binary, tmp_path, "free_stream", min_level=level, max_level=level, Tf=0.05, order=order)
     _, _, fields = read(out / stem)
 
     assert np.abs(fields["rho"] - 1.0).max() < 1e-14
@@ -27,8 +33,9 @@ def test_free_stream_stays_uniform(binary, level, tmp_path):
     assert np.abs(fields["velocity"] - 1.0).max() < 1e-14
 
 
+@pytest.mark.parametrize("order", ORDERS)
 @pytest.mark.parametrize("binary,level", DIMENSIONS)
-def test_free_stream_across_level_interfaces(binary, level, tmp_path):
+def test_free_stream_across_level_interfaces(binary, level, order, tmp_path):
     """Same, on a mesh that really carries level jumps.
 
     A uniform state has no detail anywhere, so the multiresolution coarsens it
@@ -45,6 +52,7 @@ def test_free_stream_across_level_interfaces(binary, level, tmp_path):
         max_level=level,
         Tf=0.05,
         refine_boundary=True,
+        order=order,
     )
     _, volume, fields = read(out / stem)
 
@@ -54,6 +62,26 @@ def test_free_stream_across_level_interfaces(binary, level, tmp_path):
     assert np.abs(fields["velocity"] - 1.0).max() < 1e-14
 
 
+def test_strang_is_a_single_sweep_in_one_dimension(tmp_path):
+    """With one direction to sweep, Strang splitting is the Hancock step itself.
+
+    Not an approximation of it: half a step along nothing, then the whole step
+    along x, then nothing again. The two runs have to agree bit for bit, which
+    makes this the cheapest check that the sweep machinery does not disturb
+    what it wraps.
+    """
+    runs = {}
+    for integrator in ("euler", "strang"):
+        out, stem = run_case("euler_1d", tmp_path / integrator, "advected_pulse",
+                             min_level=9, max_level=9, Tf=0.05,
+                             order=2, time_integrator=integrator)
+        _, _, runs[integrator] = read(out / stem)
+
+    for name in ("rho", "pressure", "velocity"):
+        np.testing.assert_array_equal(runs["euler"][name], runs["strang"][name])
+
+
+@pytest.mark.parametrize("order", ORDERS)
 @pytest.mark.parametrize(
     "binary,case,level",
     [
@@ -64,7 +92,7 @@ def test_free_stream_across_level_interfaces(binary, level, tmp_path):
         ("euler_3d", "sedov_blast", 4),
     ],
 )
-def test_density_and_pressure_stay_positive(binary, case, level, tmp_path):
+def test_density_and_pressure_stay_positive(binary, case, level, order, tmp_path):
     """The Euler system is only well posed for positive density and pressure.
 
     double_rarefaction leaves a near vacuum where the internal energy is a small
@@ -72,7 +100,7 @@ def test_density_and_pressure_stay_positive(binary, case, level, tmp_path):
     pressure of 1e-5: both fail loudly rather than quietly when a scheme stops
     being admissible.
     """
-    out, stem = run_case(binary, tmp_path, case, min_level=level, max_level=level, Tf=0.05)
+    out, stem = run_case(binary, tmp_path, case, min_level=level, max_level=level, Tf=0.05, order=order)
     _, _, fields = read(out / stem)
 
     assert fields["rho"].min() > 0.0

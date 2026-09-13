@@ -25,18 +25,19 @@ from error_analysis import errors, exact_vortex  # noqa: E402
 pytestmark = pytest.mark.slow
 
 # The vortex is smooth, so the error decays at the design order of the scheme.
-# HLLC without reconstruction and explicit Euler in time are first order.
+# The thresholds below are for `--order 1`, which is the default: HLLC without
+# reconstruction and explicit Euler in time are first order. The second order is
+# held to its own thresholds further down.
 #
 # The measured order approaches the design value from below, so the coarsest
 # pair of resolutions is the loosest: at levels 5 to 7 it reads 0.95 then 0.97.
-# Hence two thresholds rather than one. Move both up by one when the
-# MUSCL-Hancock update lands: this is the assertion that keeps second order once
-# it has been gained.
+# Hence two thresholds rather than one.
 MIN_ORDER = 0.90         # every consecutive pair
 MIN_FINEST_ORDER = 0.95  # the finest pair, where the asymptotic rate shows
 
 TF = 0.2
 LEVELS = [5, 6, 7]
+ORDERS = [1, 2]
 
 
 def vortex_error(workdir, level, min_level=None, **options):
@@ -98,21 +99,43 @@ def test_adaptation_costs_no_accuracy(tmp_path):
 # ---------------------------------------------------------------------------
 # These check that the cases reproduce the papers they were taken from.
 # test_regression.py checks something else, that they still compute what they
-# computed yesterday. The thresholds are what a first-order scheme
-# reaches at these resolutions, with room to spare; they should be tightened
-# when the MUSCL-Hancock update lands.
+# computed yesterday.
+#
+# The two shock tubes run at both orders, each against its own thresholds: what
+# the order-2 numbers are worth depends on the limiter, and a limiter that has
+# gone wrong at a discontinuity would pass every smooth measurement in this
+# file, those being made with no limiter at all. The thresholds are the error
+# each order actually reaches at these resolutions, with a factor of two or so
+# of room.
 from exact_riemann import solution as exact_riemann_solution  # noqa: E402
 from exact_riemann import star_state  # noqa: E402
 from sedov_exact import shock_radius  # noqa: E402
 
+TOLERANCE = {
+    # 123 problem, 4096 cells, t = 0.15
+    "double_rarefaction": {
+        #        L1 rho   L1 u    L1 p    min p, in units of the exact p*
+        1: dict(rho=1e-2, u=3e-2, p=1e-2, star=3.0),
+        2: dict(rho=1e-3, u=6e-3, p=2e-4, star=1.5),
+    },
+    # Sod rotated 45 degrees, 512 x 512, t = 0.2
+    "sod": {
+        #        L1 rho   L1 u    L1 p    largest transverse velocity
+        1: dict(rho=2e-2, u=2e-2, p=2e-2, across=5e-3),
+        2: dict(rho=4e-3, u=5e-3, p=3e-3, across=1.5e-2),
+    },
+}
 
-def test_double_rarefaction_matches_toro_test_2(tmp_path):
+
+@pytest.mark.parametrize("order", ORDERS)
+def test_double_rarefaction_matches_toro_test_2(order, tmp_path):
     """The 123 problem against the exact solution of Toro's Table 4.1, test 2."""
     level, tf = 12, 0.15
     left, right = (1.0, -2.0, 0.4), (1.0, 2.0, 0.4)
+    tol = TOLERANCE["double_rarefaction"][order]
 
     out, stem = run_case("euler_1d", tmp_path, "double_rarefaction",
-                         min_level=level, max_level=level, Tf=tf)
+                         min_level=level, max_level=level, Tf=tf, order=order)
     centers, volume, fields = read(out / stem)
     x = centers[:, 0]
     rho, u, p = exact_riemann_solution(x, tf, left, right, x0=0.5)
@@ -120,28 +143,34 @@ def test_double_rarefaction_matches_toro_test_2(tmp_path):
     def l1(computed, exact):
         return float(np.sum(np.abs(computed - exact) * volume) / np.sum(volume))
 
-    assert l1(fields["rho"], rho) < 1e-2
-    assert l1(fields["velocity"][:, 0], u) < 3e-2
-    assert l1(fields["pressure"], p) < 1e-2
+    assert l1(fields["rho"], rho) < tol["rho"]
+    assert l1(fields["velocity"][:, 0], u) < tol["u"]
+    assert l1(fields["pressure"], p) < tol["p"]
 
-    # the near-vacuum is what the case is for: a first-order scheme sits above
-    # the exact star pressure, and must not sit far above it
+    # the near-vacuum is what the case is for: both orders sit above the exact
+    # star pressure, and neither may sit far above it
     p_star, _ = star_state(left, right)
-    assert p_star < fields["pressure"].min() < 3.0 * p_star
+    assert p_star < fields["pressure"].min() < tol["star"] * p_star
 
 
-def test_sod_matches_its_exact_solution(tmp_path):
+@pytest.mark.parametrize("order", ORDERS)
+def test_sod_matches_its_exact_solution(order, tmp_path):
     """Sod's tube, rotated 45 degrees, against the exact solution.
 
     Two things at once: the waves must be in the right place, and the solution
     must stay one-dimensional along the diagonal. The transverse velocity is the
-    isotropy measure the rotation was introduced for.
+    isotropy measure the rotation was introduced for, and it is the one number
+    here that the second order makes worse, by a factor of about four: a
+    reconstruction taken direction by direction has no reason to treat a
+    discontinuity at 45 degrees as well as it treats one along an axis. Every
+    other error falls by four or more.
     """
     level, tf = 8, 0.2
     left, right = (1.0, 0.0, 1.0), (0.125, 0.0, 0.1)
+    tol = TOLERANCE["sod"][order]
 
     out, stem = run_case("euler_2d", tmp_path, "sod",
-                         min_level=level, max_level=level, Tf=tf)
+                         min_level=level, max_level=level, Tf=tf, order=order)
     centers, volume, fields = read(out / stem)
     x, y = centers[:, 0], centers[:, 1]
 
@@ -157,10 +186,10 @@ def test_sod_matches_its_exact_solution(tmp_path):
     def l1(computed, exact):
         return float(np.sum(np.abs(computed - exact) * weight) / np.sum(weight))
 
-    assert l1(fields["rho"][band], rho) < 2e-2
-    assert l1(along[band], u) < 2e-2
-    assert l1(fields["pressure"][band], p) < 2e-2
-    assert np.abs(across[band]).max() < 1e-2
+    assert l1(fields["rho"][band], rho) < tol["rho"]
+    assert l1(along[band], u) < tol["u"]
+    assert l1(fields["pressure"][band], p) < tol["p"]
+    assert np.abs(across[band]).max() < tol["across"]
 
 
 @pytest.mark.parametrize("binary,dim,level,tf", [("euler_2d", 2, 9, 0.6), ("euler_1d", 1, 12, 0.6)])
@@ -206,3 +235,108 @@ def test_riemann_2d_keeps_the_symmetry_of_its_configuration(case, tmp_path):
 
     assert np.abs(rho - rho.T).max() < 1e-12
     assert np.abs(vx - vy.T).max() < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# Second order
+# ---------------------------------------------------------------------------
+# These keep the second order once it has been gained. They fail as soon as a
+# reconstruction, a boundary condition or a prediction operator drops back to
+# first order, which is a change no other test in the suite would notice.
+#
+# The measurement is made without a slope limiter. Every limiter clips at a
+# smooth extremum, which is exactly where these two solutions live, and the
+# clipping costs a fraction of an order that says nothing about the scheme.
+# The runs that follow the limiter are checked too, more loosely.
+SECOND_ORDER = {"order": 2, "slope_limiter": "none"}
+MIN_SECOND_ORDER = 1.9
+
+PULSE_LEVELS = [8, 9, 10]
+
+
+@pytest.mark.parametrize("integrator", ["ssprk2", "strang"])
+def test_vortex_reaches_second_order(integrator, tmp_path):
+    """Two dimensions, uniform mesh. This is the exit criterion of the lot.
+
+    Both integrators that reach second order in more than one dimension are
+    held to it. The third, `euler`, is second order only in one dimension, and
+    is measured there instead.
+    """
+    l1 = [vortex_error(tmp_path / f"level{level}", level, time_integrator=integrator, **SECOND_ORDER)[0]
+          for level in LEVELS]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > MIN_SECOND_ORDER, f"L1 errors {l1}, orders {orders}"
+
+
+def test_second_order_survives_adaptation(tmp_path):
+    """Same order on an adapted mesh, with the threshold scaled as h^2.
+
+    An epsilon held fixed while the mesh refines eventually dominates the
+    discretization error and flattens the curve, so it follows the resolution
+    down. What is being tested is that adaptation costs no order, not that a
+    particular epsilon is a good one.
+    """
+    l1 = [
+        vortex_error(
+            tmp_path / f"adapted{level}",
+            level,
+            min_level=level - 2,
+            mr_eps=1e-3 * 4.0 ** -(level - LEVELS[0]),
+            time_integrator="strang",
+            **SECOND_ORDER,
+        )[0]
+        for level in LEVELS
+    ]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > MIN_SECOND_ORDER, f"L1 errors {l1}, orders {orders}"
+
+
+def pulse_error(workdir, level, **options):
+    """L1 error on the advected pulse, against the profile translated by u t.
+
+    The three constants are those of euler/init/advected_pulse.hpp. They are
+    restated rather than read from it because a Gaussian written twice is
+    cheaper to keep in step than a parser, but they do have to be kept in step.
+    """
+    amplitude, sigma, x0, u0 = 0.5, 0.04, 0.3, 1.0
+
+    out, stem = run_case("euler_1d", workdir, "advected_pulse",
+                         min_level=level, max_level=level, Tf=TF, **options)
+    centers, volume, fields = read(out / stem)
+
+    shifted = centers[:, 0] - x0 - u0 * TF
+    exact = 1.0 + amplitude * np.exp(-0.5 * shifted * shifted / (sigma * sigma))
+
+    return float(np.sum(np.abs(fields["rho"] - exact) * volume) / np.sum(volume))
+
+
+@pytest.mark.parametrize("integrator", ["euler", "ssprk2"])
+def test_second_order_in_one_dimension(integrator, tmp_path):
+    """Both integrators are second order in one dimension.
+
+    With `euler` the flux carries the Hancock predictor, and this is the test
+    that says the predictor is right: it is the one place where it is expected
+    to reach second order, transverse terms being what it cannot see and one
+    dimension having none.
+    """
+    l1 = [pulse_error(tmp_path / f"level{level}", level, time_integrator=integrator, **SECOND_ORDER)
+          for level in PULSE_LEVELS]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > MIN_SECOND_ORDER, f"L1 errors {l1}, orders {orders}"
+
+
+def test_limited_reconstruction_stays_close_to_second_order(tmp_path):
+    """The default limiter costs accuracy at the extremum, and not much more.
+
+    A limiter that has stopped limiting would pass the tests above and lose the
+    property they exist for; one that clips everything would keep the property
+    and lose the order. This holds the default between the two.
+    """
+    l1 = [pulse_error(tmp_path / f"level{level}", level, order=2, slope_limiter="moncen")
+          for level in PULSE_LEVELS]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > 1.8, f"L1 errors {l1}, orders {orders}"

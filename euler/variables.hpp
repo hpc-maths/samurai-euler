@@ -20,6 +20,11 @@ struct EulerLayout
     static constexpr std::size_t size = 2 + Dim;
 };
 
+// One state of the system, whichever variables it is written in: the layout
+// above says which component is what.
+template <std::size_t Dim>
+using ConsArray = xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size>>;
+
 template <std::size_t Dim>
 struct PrimState
 {
@@ -27,6 +32,41 @@ struct PrimState
     double p;
     xt::xtensor_fixed<double, xt::xshape<Dim>> v;
 };
+
+// The same primitive state, flattened onto the conservative layout: density in
+// the density slot, pressure where the total energy sits, velocity where the
+// momentum sits. Reconstruction needs to add and scale states, which is natural
+// on an array and clumsy on the struct, so slopes and face values are carried
+// this way and unpacked when a flux is finally asked for.
+template <std::size_t Dim>
+ConsArray<Dim> pack(const PrimState<Dim>& prim)
+{
+    using EulerConsVar = EulerLayout<Dim>;
+
+    ConsArray<Dim> w;
+    w[EulerConsVar::rho]  = prim.rho;
+    w[EulerConsVar::rhoE] = prim.p;
+    for (std::size_t d = 0; d < Dim; ++d)
+    {
+        w[EulerConsVar::mom(d)] = prim.v[d];
+    }
+    return w;
+}
+
+template <std::size_t Dim, class Array>
+PrimState<Dim> unpack(const Array& w)
+{
+    using EulerConsVar = EulerLayout<Dim>;
+
+    PrimState<Dim> prim;
+    prim.rho = w[EulerConsVar::rho];
+    prim.p   = w[EulerConsVar::rhoE];
+    for (std::size_t d = 0; d < Dim; ++d)
+    {
+        prim.v[d] = w[EulerConsVar::mom(d)];
+    }
+    return prim;
+}
 
 template <std::size_t Dim, class Eos>
 auto cons2prim(const xt::xtensor_fixed<double, xt::xshape<EulerLayout<Dim>::size>>& conserved, Eos eos)
