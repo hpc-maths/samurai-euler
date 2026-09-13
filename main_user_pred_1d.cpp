@@ -167,7 +167,9 @@ int main(int argc, char* argv[])
     samurai::save("results", fmt::format("{}_{}_init", filename, scheme), mesh, u);
 
     std::cout << "Using scheme: " << scheme << std::endl;
-    auto fv_scheme = get_fv_scheme<decltype(u)>(scheme, eos);
+    // This demo stays first order: it is here for the user-defined prediction
+    // operator, not for the scheme.
+    auto fv_scheme = make_first_order_scheme<decltype(u)>(scheme, eos);
 
     auto prediction_fn = [&](auto& new_field, const auto& old_field)
     {

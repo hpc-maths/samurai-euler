@@ -117,7 +117,7 @@ int main(int argc, char* argv[])
     samurai::dump(path, fmt::format("{}_restart_init", filename), mesh, u);
 
     std::cout << "Using scheme: " << scheme << std::endl;
-    auto fv_scheme = get_fv_scheme<decltype(u)>(scheme, eos);
+    auto fv_scheme = make_first_order_scheme<decltype(u)>(scheme, eos);
 
     auto MRadaptation = samurai::make_MRAdapt(u);
     auto mra_config   = samurai::mra_config().relative_detail(true);
