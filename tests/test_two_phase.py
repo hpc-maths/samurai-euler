@@ -173,13 +173,25 @@ def test_one_fluid_reproduces_the_monofluid_solver(scheme, order, tmp_path):
 # ---------------------------------------------------------------------------
 # T2 -- field comparison, uniform mesh
 # ---------------------------------------------------------------------------
+# Looser than the 1e-12 the monofluid references are held to, and the reason is
+# the problem rather than the model: the tube spans a gigapascal against an
+# atmosphere, and four hundred steps of a nonlinear scheme over a jump of four
+# decades amplify the last bit of a sum into something a second machine does not
+# reproduce. Measured between an ARM and an x86 runner, one cell in a hundred and
+# twenty-eight differs by 3e-12 relative, the rest agreeing to the bit.
+#
+# 1e-9 keeps three hundred times that margin and still pins nine digits of every
+# cell, which is far tighter than any change of the scheme could slip through.
+REFERENCE_RTOL = 1e-9
+
+
 @pytest.mark.parametrize("scheme", ["rusanov", "hll", "hllc"])
 def test_water_air_shock_tube_reference(scheme, generate_ref, tmp_path):
     """What the tube computed yesterday, on a uniform mesh and at low resolution."""
     out, stem = run_case(
         "two_phase_1d", tmp_path, "water_air_shock_tube", scheme=scheme, min_level=7, max_level=7, Tf=TF, order=2
     )
-    compare_or_generate(out / stem, f"two_phase_1d_water_air_{scheme}", generate_ref)
+    compare_or_generate(out / stem, f"two_phase_1d_water_air_{scheme}", generate_ref, rtol=REFERENCE_RTOL)
 
 
 def interface_width(centers, fields):
