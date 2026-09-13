@@ -47,9 +47,10 @@
 //  times smaller than SSP-RK2 at every resolution measured. It also brings a
 //  splitting error of its own, which is second order and symmetric.
 //
-//  Hence `auto`: explicit Euler at order 1, SSP-RK2 at order 2. In one
-//  dimension `--time-integrator euler` at order 2 is the better scheme, and
-//  Strang reduces to it exactly, there being only one direction to sweep.
+//  Hence `auto`: explicit Euler at order 1, Strang at order 2. In one dimension
+//  Strang is the single Hancock step, so `auto` is the right scheme there too,
+//  and SSP-RK2 stays available as the counter-check that owes nothing to a
+//  predictor or to a sweep order.
 // =============================================================================
 
 enum class TimeIntegrator
@@ -59,11 +60,11 @@ enum class TimeIntegrator
     strang
 };
 
-// What `--time-integrator auto` means: the cheapest integrator that gives the
-// scheme the order it is being asked for.
+// What `--time-integrator auto` means: the integrator that gives the scheme the
+// order it is being asked for, and the most accurate of those that do.
 inline std::string default_time_integrator(std::size_t order)
 {
-    return order == 1 ? "euler" : "ssprk2";
+    return order == 1 ? "euler" : "strang";
 }
 
 inline TimeIntegrator time_integrator_from_name(const std::string& name)
