@@ -212,7 +212,8 @@ int main(int argc, char* argv[])
     auto fv_scheme = get_fv_scheme<decltype(u)>(scheme, eos);
 
     samurai::times::timers.start("TimeLoop");
-    bool done = false;
+    std::size_t limited_cells = 0;
+    bool done                 = false;
     while (!done)
     {
         double dt = cfl * dx / get_max_lambda(u, eos);
@@ -243,8 +244,10 @@ int main(int argc, char* argv[])
         samurai::swap(u, unp1);
 
         // Enforce admissibility of the finite-volume update before it feeds the
-        // next time-step computation (sound speed) and mesh adaptation.
-        limit_positivity(u, eos);
+        // next time-step computation (sound speed) and mesh adaptation. What is
+        // worth watching is the count: the floor is a net, and a net that
+        // carries weight is telling us something about the scheme above it.
+        limited_cells += limit_positivity(u, eos);
 
         t += dt;
 
@@ -256,6 +259,9 @@ int main(int argc, char* argv[])
         }
     }
     samurai::times::timers.stop("TimeLoop");
+
+    std::cout << std::endl
+              << fmt::format("positivity floor applied to {} cell updates over {} iterations", limited_cells, nt) << std::endl;
 
     samurai::finalize();
     return 0;
