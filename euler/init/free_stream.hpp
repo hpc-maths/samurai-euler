@@ -23,6 +23,10 @@
 //
 //  The exact solution at any time is the same constant state, so the error is
 //  obtained by comparing to the initial uniform values.
+//
+//  No paper to compare this against: free-stream preservation is a property of
+//  the discretisation, so it is checked against machine precision rather than
+//  against a published figure.
 // =============================================================================
 
 namespace test_case::free_stream

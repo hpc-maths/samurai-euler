@@ -19,6 +19,22 @@
 //  that the solution is not aligned with the mesh. Any directional bias in the
 //  scheme or in the adaptation shows up as a distortion of what should stay a
 //  planar wave.
+//
+//  The states are those of
+//
+//      G.A. Sod, "A survey of several finite difference methods for systems of
+//      nonlinear hyperbolic conservation laws", J. Comput. Phys. 27 (1) (1978)
+//      1-31, https://doi.org/10.1016/0021-9991(78)90023-2
+//
+//  reprinted as test 1 of Table 4.1 of
+//
+//      E.F. Toro, "Riemann Solvers and Numerical Methods for Fluid Dynamics.
+//      A Practical Introduction", 3rd ed., Springer, 2009,
+//      https://doi.org/10.1007/b79761
+//
+//  whose exact solution python/exact_riemann.py computes: p* = 0.30313,
+//  u* = 0.92745. The 45 degree rotation is ours, not Sod's; the article this
+//  repository reproduces uses the axis-aligned tube.
 // =============================================================================
 
 namespace test_case::sod

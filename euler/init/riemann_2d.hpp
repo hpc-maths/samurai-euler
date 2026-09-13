@@ -18,15 +18,33 @@
 //  The nineteen admissible combinations are classified in
 //
 //      P.D. Lax, X.-D. Liu, "Solution of two-dimensional Riemann problems of gas
-//      dynamics by positive schemes", SIAM J. Sci. Comput. 19 (1998) 319-340.
+//      dynamics by positive schemes", SIAM J. Sci. Comput. 19 (2) (1998)
+//      319-340, https://doi.org/10.1137/S1064827595291819
+//
+//  and are tabulated, with this numbering, in
+//
+//      A. Kurganov, E. Tadmor, "Solution of two-dimensional Riemann problems
+//      for gas dynamics without Riemann problem solvers", Numer. Methods
+//      Partial Differ. Equ. 18 (5) (2002) 584-608,
+//      https://doi.org/10.1002/num.10025
+//
+//  The states registered below are those tables, verbatim; the article this
+//  repository reproduces (eq. 4) takes configuration 3 as its reference case
+//  for performance.
 //
 //  Quadrants are numbered counter-clockwise from the upper right:
 //      q[0] : x >= x0, y >= y0        q[1] : x <  x0, y >= y0
 //      q[2] : x <  x0, y <  y0        q[3] : x >= x0, y <  y0
 //
-//  TODO (lot 2) the interface should sit at x0 = y0 = 0.8, and configuration 3
-//  has p = 0.029 in quadrant 3, not 0.29. Both are corrected in their own commit
-//  so that this one stays behaviour preserving.
+//  The interfaces sit at x0 = y0 = 0.8 on [0,1]^2, as in Lax & Liu and in the
+//  article this repository reproduces: with t_f = 0.8 the waves then fill
+//  the domain without reaching its boundary, where the outflow condition
+//  would pollute them.
+//
+//  All three configurations below are invariant under the reflection about the
+//  diagonal (x,y,u,v) -> (y,x,v,u), so their solution must be too.
+//  tests/test_validation.py asserts that, and a single mistyped digit in one
+//  quadrant is enough to break it.
 // =============================================================================
 
 namespace test_case::riemann_2d
@@ -78,32 +96,32 @@ namespace test_case::riemann_2d
 
     // --- configuration 3 -----------------------------------------------------
     inline const Config config_3{
-        0.5,
-        0.5,
+        0.8,
+        0.8,
         {PrimState<2>{1.5, 1.5, {0., 0.}},
           PrimState<2>{0.5323, 0.3, {1.206, 0.}},
-          PrimState<2>{0.138, 0.29, {1.206, 1.206}},
+          PrimState<2>{0.138, 0.029, {1.206, 1.206}},
           PrimState<2>{0.5323, 0.3, {0., 1.206}}}
     };
 
     // --- configuration 4 -----------------------------------------------------
     inline const Config config_4{
-        0.5,
-        0.5,
+        0.8,
+        0.8,
         {PrimState<2>{1.1, 1.1, {0., 0.}},
           PrimState<2>{0.5065, 0.35, {0.8939, 0.}},
-          PrimState<2>{1.1, 1.1, {0.8939, 0.89396}},
-          PrimState<2>{0.5065, 0.35, {0., 0.89396}}}
+          PrimState<2>{1.1, 1.1, {0.8939, 0.8939}},
+          PrimState<2>{0.5065, 0.35, {0., 0.8939}}}
     };
 
     // --- configuration 12 ----------------------------------------------------
     inline const Config config_12{
-        0.5,
-        0.5,
-        {PrimState<2>{0.5197, 0.4, {0., 0.}},
-          PrimState<2>{1., 1., {-0.6259, 0.}},
-          PrimState<2>{0.8, 1., {-0.6259, -0.6259}},
-          PrimState<2>{1., 1., {0., -0.6259}}}
+        0.8,
+        0.8,
+        {PrimState<2>{0.5313, 0.4, {0., 0.}},
+          PrimState<2>{1., 1., {0.7276, 0.}},
+          PrimState<2>{0.8, 1., {0., 0.}},
+          PrimState<2>{1., 1., {0., 0.7276}}}
     };
 
     // One definition per configuration; `--riemann-config` will replace these

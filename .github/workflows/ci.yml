@@ -16,6 +16,12 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      # Some of the Azure runners expose a MANA RDMA device. UCX picks it up,
+      # fails to open it, and MPI_Init aborts, which fails every test before it
+      # runs. The suite drives one rank, so keeping UCX on shared memory and TCP
+      # costs nothing.
+      UCX_TLS: sm,self,tcp
     steps:
       - uses: actions/checkout@v4
 

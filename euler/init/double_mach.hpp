@@ -19,6 +19,19 @@
 //  wall along the bottom boundary starting at x0, the shock entering upstream of
 //  it. The top boundary follows the analytic shock position, which is why the
 //  boundary condition needs the current time.
+//
+//  The set-up is the one of
+//
+//      P. Woodward, P. Colella, "The numerical simulation of two-dimensional
+//      fluid flow with strong shocks", J. Comput. Phys. 54 (1) (1984) 115-173,
+//      https://doi.org/10.1016/0021-9991(84)90142-6
+//
+//  section IVa: domain [0,4] x [0,1], wall from x0 = 1/6, final time 0.2.
+//
+//  The post-shock state below follows from the Rankine-Hugoniot conditions for
+//  a Mach 10 shock running into (rho, p) = (1.4, 1), a gas whose sound speed is
+//  therefore 1: density 1.4 (2.4 M^2)/(0.4 M^2 + 2) = 8, pressure
+//  (2.8 M^2 - 0.4)/2.4 = 116.5, speed (1 - 1.4/8) x 10 = 8.25.
 // =============================================================================
 
 namespace test_case::double_mach_reflection

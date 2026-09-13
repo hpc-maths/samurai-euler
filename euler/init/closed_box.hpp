@@ -22,6 +22,9 @@
 //  check that a flux is conservative, which is the first thing a reconstruction
 //  can quietly break, and it is the only case that exercises the Reflective
 //  boundary condition.
+//
+//  Like the free stream, this case has no publication behind it: what it checks
+//  is a conservation identity of the scheme, held to round-off.
 // =============================================================================
 
 namespace test_case::closed_box

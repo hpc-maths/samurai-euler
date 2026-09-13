@@ -17,7 +17,7 @@ import sys
 import numpy as np
 import pytest
 
-from util import ROOT, level_count, read, run_case
+from util import ROOT, level_count, read, run_case, sedov_blast_energy
 
 sys.path.insert(0, str(ROOT / "python"))
 from error_analysis import errors, exact_vortex  # noqa: E402
@@ -91,3 +91,118 @@ def test_adaptation_costs_no_accuracy(tmp_path):
     assert adapted_l1 < 1.5 * uniform_l1, (
         f"adapted L1 {adapted_l1:.3e} against uniform {uniform_l1:.3e}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The published test cases, against the solution their paper gives
+# ---------------------------------------------------------------------------
+# These check that the cases reproduce the papers they were taken from.
+# test_regression.py checks something else, that they still compute what they
+# computed yesterday. The thresholds are what a first-order scheme
+# reaches at these resolutions, with room to spare; they should be tightened
+# when the MUSCL-Hancock update lands.
+from exact_riemann import solution as exact_riemann_solution  # noqa: E402
+from exact_riemann import star_state  # noqa: E402
+from sedov_exact import shock_radius  # noqa: E402
+
+
+def test_double_rarefaction_matches_toro_test_2(tmp_path):
+    """The 123 problem against the exact solution of Toro's Table 4.1, test 2."""
+    level, tf = 12, 0.15
+    left, right = (1.0, -2.0, 0.4), (1.0, 2.0, 0.4)
+
+    out, stem = run_case("euler_1d", tmp_path, "double_rarefaction",
+                         min_level=level, max_level=level, Tf=tf)
+    centers, volume, fields = read(out / stem)
+    x = centers[:, 0]
+    rho, u, p = exact_riemann_solution(x, tf, left, right, x0=0.5)
+
+    def l1(computed, exact):
+        return float(np.sum(np.abs(computed - exact) * volume) / np.sum(volume))
+
+    assert l1(fields["rho"], rho) < 1e-2
+    assert l1(fields["velocity"][:, 0], u) < 3e-2
+    assert l1(fields["pressure"], p) < 1e-2
+
+    # the near-vacuum is what the case is for: a first-order scheme sits above
+    # the exact star pressure, and must not sit far above it
+    p_star, _ = star_state(left, right)
+    assert p_star < fields["pressure"].min() < 3.0 * p_star
+
+
+def test_sod_matches_its_exact_solution(tmp_path):
+    """Sod's tube, rotated 45 degrees, against the exact solution.
+
+    Two things at once: the waves must be in the right place, and the solution
+    must stay one-dimensional along the diagonal. The transverse velocity is the
+    isotropy measure the rotation was introduced for.
+    """
+    level, tf = 8, 0.2
+    left, right = (1.0, 0.0, 1.0), (0.125, 0.0, 0.1)
+
+    out, stem = run_case("euler_2d", tmp_path, "sod",
+                         min_level=level, max_level=level, Tf=tf)
+    centers, volume, fields = read(out / stem)
+    x, y = centers[:, 0], centers[:, 1]
+
+    # coordinate across the interface, and the velocity split along and across it
+    band = np.abs(x - y) < 0.3  # away from the corners, where outflow is not exact
+    xi = (x + y - 1.0) / np.sqrt(2.0)
+    along = (fields["velocity"][:, 0] + fields["velocity"][:, 1]) / np.sqrt(2.0)
+    across = (fields["velocity"][:, 0] - fields["velocity"][:, 1]) / np.sqrt(2.0)
+
+    rho, u, p = exact_riemann_solution(xi[band], tf, left, right, x0=0.0)
+    weight = volume[band]
+
+    def l1(computed, exact):
+        return float(np.sum(np.abs(computed - exact) * weight) / np.sum(weight))
+
+    assert l1(fields["rho"][band], rho) < 2e-2
+    assert l1(along[band], u) < 2e-2
+    assert l1(fields["pressure"][band], p) < 2e-2
+    assert np.abs(across[band]).max() < 1e-2
+
+
+@pytest.mark.parametrize("binary,dim,level,tf", [("euler_2d", 2, 9, 0.6), ("euler_1d", 1, 12, 0.6)])
+def test_sedov_shock_sits_where_the_similarity_solution_puts_it(binary, dim, level, tf, tmp_path):
+    """The blast energy is only meaningful through the shock radius it produces.
+
+    Measured as the outermost radius at which the density is still above halfway
+    to its peak, which is where a smeared shock front has its middle. A wrong
+    blast energy shows up here and nowhere else: every other check of this case
+    is a symmetry or a positivity, and both survive any energy at all.
+    """
+    out, stem = run_case(binary, tmp_path, "sedov_blast",
+                         min_level=level, max_level=level, Tf=tf)
+    centers, _, fields = read(out / stem)
+
+    r = np.linalg.norm(centers[:, :dim], axis=1)
+    rho = fields["rho"]
+    front = r[rho > 0.5 * (rho.max() + 1.0)].max()
+
+    expected = shock_radius(sedov_blast_energy(dim), tf, dim)
+    assert abs(front / expected - 1.0) < 0.1, f"shock at {front:.4f}, similarity solution at {expected:.4f}"
+
+
+@pytest.mark.parametrize("case", ["riemann2d_config3", "riemann2d_config4", "riemann2d_config12"])
+def test_riemann_2d_keeps_the_symmetry_of_its_configuration(case, tmp_path):
+    """Lax & Liu configurations 3, 4 and 12 are symmetric about the diagonal.
+
+    Their initial data is invariant under (x,y,u,v) -> (y,x,v,u), so the solution
+    is too, and a uniform mesh carries that symmetry exactly. It is the cheapest
+    check that the states were copied correctly: a single mistyped digit in one
+    quadrant breaks it, while leaving a picture that still looks plausible.
+    """
+    level, tf = 7, 0.2
+    out, stem = run_case("euler_2d", tmp_path, case,
+                         min_level=level, max_level=level, Tf=tf)
+    centers, _, fields = read(out / stem)
+
+    n = int(round(np.sqrt(centers.shape[0])))
+    order = np.lexsort((centers[:, 0], centers[:, 1]))
+    rho = fields["rho"][order].reshape(n, n)
+    vx = fields["velocity"][order, 0].reshape(n, n)
+    vy = fields["velocity"][order, 1].reshape(n, n)
+
+    assert np.abs(rho - rho.T).max() < 1e-12
+    assert np.abs(vx - vy.T).max() < 1e-12
