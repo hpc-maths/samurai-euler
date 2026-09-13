@@ -206,3 +206,100 @@ def test_riemann_2d_keeps_the_symmetry_of_its_configuration(case, tmp_path):
 
     assert np.abs(rho - rho.T).max() < 1e-12
     assert np.abs(vx - vy.T).max() < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# Second order
+# ---------------------------------------------------------------------------
+# These keep the second order once it has been gained. They fail as soon as a
+# reconstruction, a boundary condition or a prediction operator drops back to
+# first order, which is a change no other test in the suite would notice.
+#
+# The measurement is made without a slope limiter. Every limiter clips at a
+# smooth extremum, which is exactly where these two solutions live, and the
+# clipping costs a fraction of an order that says nothing about the scheme.
+# The runs that follow the limiter are checked too, more loosely.
+SECOND_ORDER = {"order": 2, "slope_limiter": "none"}
+MIN_SECOND_ORDER = 1.9
+
+PULSE_LEVELS = [8, 9, 10]
+
+
+def test_vortex_reaches_second_order(tmp_path):
+    """Two dimensions, uniform mesh. This is the exit criterion of the lot."""
+    l1 = [vortex_error(tmp_path / f"level{level}", level, **SECOND_ORDER)[0] for level in LEVELS]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > MIN_SECOND_ORDER, f"L1 errors {l1}, orders {orders}"
+
+
+def test_second_order_survives_adaptation(tmp_path):
+    """Same order on an adapted mesh, with the threshold scaled as h^2.
+
+    An epsilon held fixed while the mesh refines eventually dominates the
+    discretization error and flattens the curve, so it follows the resolution
+    down. What is being tested is that adaptation costs no order, not that a
+    particular epsilon is a good one.
+    """
+    l1 = [
+        vortex_error(
+            tmp_path / f"adapted{level}",
+            level,
+            min_level=level - 2,
+            mr_eps=1e-3 * 4.0 ** -(level - LEVELS[0]),
+            **SECOND_ORDER,
+        )[0]
+        for level in LEVELS
+    ]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > MIN_SECOND_ORDER, f"L1 errors {l1}, orders {orders}"
+
+
+def pulse_error(workdir, level, **options):
+    """L1 error on the advected pulse, against the profile translated by u t.
+
+    The three constants are those of euler/init/advected_pulse.hpp. They are
+    restated rather than read from it because a Gaussian written twice is
+    cheaper to keep in step than a parser, but they do have to be kept in step.
+    """
+    amplitude, sigma, x0, u0 = 0.5, 0.04, 0.3, 1.0
+
+    out, stem = run_case("euler_1d", workdir, "advected_pulse",
+                         min_level=level, max_level=level, Tf=TF, **options)
+    centers, volume, fields = read(out / stem)
+
+    shifted = centers[:, 0] - x0 - u0 * TF
+    exact = 1.0 + amplitude * np.exp(-0.5 * shifted * shifted / (sigma * sigma))
+
+    return float(np.sum(np.abs(fields["rho"] - exact) * volume) / np.sum(volume))
+
+
+@pytest.mark.parametrize("integrator", ["euler", "ssprk2"])
+def test_second_order_in_one_dimension(integrator, tmp_path):
+    """Both integrators are second order in one dimension.
+
+    With `euler` the flux carries the Hancock predictor, and this is the test
+    that says the predictor is right: it is the one place where it is expected
+    to reach second order, transverse terms being what it cannot see and one
+    dimension having none.
+    """
+    l1 = [pulse_error(tmp_path / f"level{level}", level, time_integrator=integrator, **SECOND_ORDER)
+          for level in PULSE_LEVELS]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > MIN_SECOND_ORDER, f"L1 errors {l1}, orders {orders}"
+
+
+def test_limited_reconstruction_stays_close_to_second_order(tmp_path):
+    """The default limiter costs accuracy at the extremum, and not much more.
+
+    A limiter that has stopped limiting would pass the tests above and lose the
+    property they exist for; one that clips everything would keep the property
+    and lose the order. This holds the default between the two.
+    """
+    l1 = [pulse_error(tmp_path / f"level{level}", level, order=2, slope_limiter="moncen")
+          for level in PULSE_LEVELS]
+    orders = [np.log2(a / b) for a, b in zip(l1, l1[1:])]
+
+    assert orders[-1] > 1.8, f"L1 errors {l1}, orders {orders}"
