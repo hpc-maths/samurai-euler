@@ -22,6 +22,7 @@ SCHEMES = ["rusanov", "hll", "hllc"]
 # (binary, case, level, final time). Levels are low on purpose: the reference
 # files are versioned, and a case is not made sharper by holding more cells.
 CASES = [
+    ("euler_1d", "advected_pulse", 8, 0.05),
     ("euler_1d", "double_rarefaction", 8, 0.05),
     ("euler_1d", "free_stream", 8, 0.05),
     ("euler_1d", "sedov_blast", 8, 0.05),
