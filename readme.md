@@ -359,6 +359,7 @@ two more equations.
 | `water_air_shock_tube` | Section 6.1.1 of the article: water at 1e9 Pa against air at 1e5, tube [-2, 2], diaphragm at 0.7, `t_f = 9e-4`. In 2D the domain is [-2,2] x [-0.4,0.4], where level 6 is exactly the 320 x 64 equivalent resolution the article quotes. |
 | `triple_point` | Section 6.1.2, as the article poses it: two gases, `gamma = 1.5` in regions 1 and 3 and 1.4 in region 2, [0,7] x [0,3], `t_f = 2.0`. `triple_point_single_gamma` in the monofluid solver is the same geometry with one gas and says at length that it is not this case. |
 | `advected_interface` | A slab of water in air, everything at one atmosphere and moving at 100 m/s. The exact solution is the initial state translated, and a scheme that advects the volume fraction inconsistently with the masses produces a pressure spike out of nothing. |
+| `sod_x_pure` | Sod's tube as a two-phase state that is one fluid everywhere. With `alpha = 1` the model is the Euler system, and the suite holds the two solvers to twelve digits of each other. |
 
 ```bash
 ./two_phase_1d --test-case water_air_shock_tube --min-level 10 --max-level 10 --order 2
@@ -383,13 +384,55 @@ The interface condition is a separate test and a stricter one: on
 `advected_interface` the pressure stays uniform to 1e-11 relative and the
 velocity to 1e-14, which is round-off and not a physical smallness.
 
+### Interface sharpening: `--thinc`
+
+The diffuse interface of the five-equation model spreads over about ten cells and
+keeps spreading. THINC — Tangent of Hyperbola for INterface Capturing — holds it
+on two or three by reconstructing the volume fraction inside a mixed cell as a
+hyperbolic tangent instead of a limited straight line:
+
+```
+alpha_i(X) = 1/2 [ 1 + tanh( beta (sigma X + x_c) ) ],   X in [0, 1]
+```
+
+`sigma` says which way the interface faces, `beta` how steep it is
+(`--thinc-beta`, 1.6 by default) and `x_c` where it sits inside the cell. Only
+`x_c` is unknown, and it is fixed by requiring the profile to average to the cell
+average it came from — in closed form, so conservation is exact rather than
+approached.
+
+It replaces the reconstruction of the **volume fraction alone**. Pressure,
+velocity and the two partial densities keep their MUSCL slopes, and the total
+energy is rebuilt from the sharpened `alpha`; the mixture law being linear in
+`alpha`, a uniform pressure survives it exactly, which the interface test still
+measures at 1e-11.
+
+The steepness is weighted by the interface normal, `beta_d = beta |n_d| + 0.001`,
+so a face the interface runs parallel to is not sharpened at all — that is what
+stops the scheme from carving steps into an oblique interface. The normal comes
+from the gradient of `psi = alpha^m / (alpha^m + (1-alpha)^m)` with `m = 0.1`, and
+since a flux stencil is a line and cannot see across itself, it is computed once
+per time step over the whole mesh and read from a field.
+
+Measured on the water-air tube at level 10, second order:
+
+| | interface | contact | L1 on alpha | L1 on rho |
+| :--- | :---: | :---: | :---: | :---: |
+| diffuse | 9 cells | 1.1426 | 1.8e-3 | 1.53e-3 |
+| `--thinc` | **3 cells** | 1.1426 | 6.9e-4 | 1.54e-3 |
+
+The contact does not move, the density and pressure errors do not change, and
+the volume fraction is two and a half times more accurate. On the triple point
+the mixed cells drop from 1912 to 1147 at the same time. A run with no interface
+at all is untouched to the bit, which the suite checks on Sod's tube: the
+sharpening keys on the volume fraction, not on steepness, so it does not reach
+for a shock.
+
+`--thinc` needs `--order 2`: there is no reconstruction to replace at first
+order.
+
 ### What is not there yet
 
-- **THINC interface sharpening.** The article publishes the shock tube with and
-  without it, so the diffuse-interface runs above are a comparison point of their
-  own; the sharpening is a reconstruction to be swapped in for the volume
-  fraction in mixed cells, and it is what takes the interface from nine cells to
-  two or three.
 - **The positivity-preserving multiresolution prediction** of the monofluid
   solver, which keys on the Euler layout. An adapted two-phase run has the
   default prediction plus the admissibility floor, which clamps the volume

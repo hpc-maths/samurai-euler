@@ -22,6 +22,7 @@
 #include "euler/two_phase/init/cases.hpp"
 #include "euler/two_phase/registry.hpp"
 #include "euler/two_phase/scheme.hpp"
+#include "euler/two_phase/thinc.hpp"
 #include "euler/two_phase/utils.hpp"
 #include "euler/two_phase/variables.hpp"
 
@@ -37,9 +38,6 @@
 //
 //  What is deliberately NOT here yet:
 //
-//    - THINC interface sharpening. The article publishes the shock tube with and
-//      without it, so the diffuse-interface run below is a comparison point of
-//      its own, and the sharpening is a reconstruction to be swapped in later.
 //    - The positivity-preserving multiresolution prediction of the monofluid
 //      solver, which keys on the Euler layout. The default prediction plus the
 //      admissibility floor is what an adapted two-phase run has for now.
@@ -61,6 +59,8 @@ int run_two_phase(int argc, char* argv[])
     std::string time_integrator = "auto";
     std::string scheme          = "hllc";
     std::string test_case       = "water_air_shock_tube";
+
+    two_phase::ThincOptions thinc;
 
     fs::path path = "results";
     std::string filename;
@@ -89,6 +89,9 @@ int run_two_phase(int argc, char* argv[])
         ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang"}))
         ->group("Simulation parameters");
     app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
+    app.add_flag("--thinc", thinc.enabled, "Sharpen the interface: THINC reconstruction of the volume fraction in mixed cells")
+        ->group("Simulation parameters");
+    app.add_option("--thinc-beta", thinc.beta, "Steepness of the THINC profile")->capture_default_str()->group("Simulation parameters");
     app.add_option("--restart-file", restart_file, "Restart file")->capture_default_str()->group("Simulation parameters");
     app.add_option("--path", path, "Output path")->capture_default_str()->group("Output");
     app.add_option("--filename", filename, "File name prefix (defaults to <test-case>_<scheme>)")->group("Output");
@@ -170,10 +173,16 @@ int run_two_phase(int argc, char* argv[])
     two_phase::SchemeOptions options{.limiter   = slope_limiter_from_name(slope_limiter),
                                      .hancock   = integrator != TimeIntegrator::ssprk2,
                                      .dt        = dt_for_flux,
-                                     .direction = -1};
+                                     .direction = -1,
+                                     .thinc     = thinc};
+
+    // |n_d| per cell and per direction, which is what weights the steepness of
+    // the THINC profile. The flux function reads it through a pointer and this
+    // is the field it points at, recomputed at the top of every time step.
+    auto normals = samurai::make_vector_field<double, dim>("interface_normal", mesh);
 
     auto first_order  = two_phase::make_first_order_scheme<field_t>(scheme, eos);
-    auto second_order = two_phase::make_second_order_scheme<field_t>(scheme, eos, options);
+    auto second_order = two_phase::make_second_order_scheme<field_t>(scheme, eos, options, &normals);
 
     auto directional = [&](auto&& make_one)
     {
@@ -193,7 +202,7 @@ int run_two_phase(int argc, char* argv[])
         {
             auto sweep_options      = options;
             sweep_options.direction = d;
-            return two_phase::make_second_order_scheme<field_t>(scheme, eos, sweep_options);
+            return two_phase::make_second_order_scheme<field_t>(scheme, eos, sweep_options, &normals);
         });
 
     Metrics metrics(mesh);
@@ -233,6 +242,18 @@ int run_two_phase(int argc, char* argv[])
         std::cout << fmt::format("iteration {}: t = {}, dt = {}", nt++, t, dt) << "\r";
 
         metrics.step(mesh);
+
+        if (thinc.enabled)
+        {
+            // The interface normal is a property of the state at the start of
+            // the step, and the ghosts have to be filled before it can be read
+            // across a level jump. One evaluation per step, not one per stage:
+            // the interface moves by less than a cell in a step, and a normal
+            // that is one stage old is a smaller error than the one the
+            // sharpening is correcting.
+            samurai::update_ghost_mr(u);
+            two_phase::compute_interface_normals(u, normals);
+        }
 
         if (order == 1)
         {

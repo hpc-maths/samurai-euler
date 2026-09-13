@@ -11,6 +11,7 @@
 
 #include "../reconstruction.hpp"
 #include "riemann.hpp"
+#include "thinc.hpp"
 #include "variables.hpp"
 
 // =============================================================================
@@ -53,6 +54,10 @@ namespace two_phase
         bool hancock         = true;
         std::shared_ptr<const double> dt;
         int direction = -1;
+
+        // Interface sharpening, which replaces the reconstruction of the volume
+        // fraction in mixed cells and leaves every other variable alone.
+        ThincOptions thinc;
     };
 
     // The primitive form of the system applied to a slope, i.e. A_d(W) dW.
@@ -157,8 +162,12 @@ namespace two_phase
         return scheme;
     }
 
-    template <riemann::Solver solver, class Field>
-    auto make_muscl_scheme(const EOS::Mixture& eos, const SchemeOptions& options)
+    // `normals` holds |n_d| per cell and per direction, and is read only when
+    // the sharpening is on. It is a pointer to a field that outlives the scheme:
+    // the flux function is built once and called throughout the run, while the
+    // normals are recomputed at every time step.
+    template <riemann::Solver solver, class Field, class NormalField>
+    auto make_muscl_scheme(const EOS::Mixture& eos, const SchemeOptions& options, const NormalField* normals)
     {
         assert((!options.hancock || options.dt) && "the Hancock predictor needs a time step to read");
 
@@ -180,20 +189,43 @@ namespace two_phase
                     return;
                 }
 
-                muscl[d].flux_function = [eos, options](samurai::FluxValuePair<cfg>& fluxes,
-                                                        const samurai::StencilData<cfg>& data,
-                                                        const samurai::StencilValues<cfg>& field)
+                muscl[d].flux_function = [eos, options, normals](samurai::FluxValuePair<cfg>& fluxes,
+                                                                 const samurai::StencilData<cfg>& data,
+                                                                 const samurai::StencilValues<cfg>& field)
                 {
                     const auto w0 = pack<dim>(cons2prim<dim>(field[0], eos));
                     const auto w1 = pack<dim>(cons2prim<dim>(field[1], eos));
                     const auto w2 = pack<dim>(cons2prim<dim>(field[2], eos));
                     const auto w3 = pack<dim>(cons2prim<dim>(field[3], eos));
 
-                    const auto slopeL = limited_slope<n_comp>(w1 - w0, w2 - w1, options.limiter);
-                    const auto slopeR = limited_slope<n_comp>(w2 - w1, w3 - w2, options.limiter);
+                    auto slopeL = limited_slope<n_comp>(w1 - w0, w2 - w1, options.limiter);
+                    auto slopeR = limited_slope<n_comp>(w2 - w1, w3 - w2, options.limiter);
 
                     ConsArray<dim> wL = w1 + 0.5 * slopeL;
                     ConsArray<dim> wR = w2 - 0.5 * slopeR;
+
+                    // The sharpening replaces the straight line of the volume
+                    // fraction by a hyperbolic tangent, in the cell on either
+                    // side of the face and only where the cell is an interface.
+                    // It has to happen before the predictor, which advances the
+                    // face value it is handed with the slope it is handed.
+                    if (options.thinc.enabled)
+                    {
+                        auto sharpen = [&](std::size_t cell, double behind, double ahead, ConsArray<dim>& w, auto& slope, bool right_face)
+                        {
+                            const double beta = options.thinc.beta * (*normals)[data.cells[cell]][d] + 0.001;
+
+                            ThincProfile profile;
+                            if (thinc_profile(behind, field[cell][Layout<dim>::alpha], ahead, beta, options.thinc, profile))
+                            {
+                                slope[Layout<dim>::alpha] = profile.slope();
+                                w[Layout<dim>::alpha]     = right_face ? profile.right : profile.left;
+                            }
+                        };
+
+                        sharpen(1, field[0][Layout<dim>::alpha], field[2][Layout<dim>::alpha], wL, slopeL, true);
+                        sharpen(2, field[1][Layout<dim>::alpha], field[3][Layout<dim>::alpha], wR, slopeR, false);
+                    }
 
                     if (options.hancock)
                     {
@@ -234,17 +266,17 @@ namespace two_phase
         }
     }
 
-    template <class Field>
-    auto make_second_order_scheme(const std::string& name, const EOS::Mixture& eos, const SchemeOptions& options)
+    template <class Field, class NormalField>
+    auto make_second_order_scheme(const std::string& name, const EOS::Mixture& eos, const SchemeOptions& options, const NormalField* normals)
     {
         switch (riemann::from_name(name))
         {
             case riemann::Solver::rusanov:
-                return make_muscl_scheme<riemann::Solver::rusanov, Field>(eos, options);
+                return make_muscl_scheme<riemann::Solver::rusanov, Field>(eos, options, normals);
             case riemann::Solver::hll:
-                return make_muscl_scheme<riemann::Solver::hll, Field>(eos, options);
+                return make_muscl_scheme<riemann::Solver::hll, Field>(eos, options, normals);
             default:
-                return make_muscl_scheme<riemann::Solver::hllc, Field>(eos, options);
+                return make_muscl_scheme<riemann::Solver::hllc, Field>(eos, options, normals);
         }
     }
 }

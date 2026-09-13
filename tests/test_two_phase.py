@@ -53,17 +53,23 @@ TF = 9e-4
 # ---------------------------------------------------------------------------
 # T1 -- invariants
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("thinc", [False, True])
 @pytest.mark.parametrize("order", ORDERS)
 @pytest.mark.parametrize("binary,level", [("two_phase_1d", 8), ("two_phase_2d", 6)])
-def test_an_advected_interface_leaves_pressure_and_velocity_alone(binary, level, order, tmp_path):
+def test_an_advected_interface_leaves_pressure_and_velocity_alone(binary, level, order, thinc, tmp_path):
     """The interface condition, on the hardest pair of fluids in the repository.
 
     Water and air at one atmosphere, moving together at 100 m/s: the volume
     fraction travels and nothing else happens. The tolerance is round-off, not a
     physical smallness -- the model is built so that this is exact.
+
+    With the sharpening as well, and for a reason: THINC replaces the
+    reconstruction of the volume fraction and of nothing else, and what says that
+    is allowed is that the mixture law is linear in alpha. Break that and this
+    test is where it shows.
     """
     out, stem = run_case(
-        binary, tmp_path, "advected_interface", min_level=level, max_level=level, Tf=1e-3, order=order
+        binary, tmp_path, "advected_interface", min_level=level, max_level=level, Tf=1e-3, order=order, thinc=thinc or None
     )
     _, _, fields = read(out / stem)
 
@@ -77,8 +83,9 @@ def test_an_advected_interface_leaves_pressure_and_velocity_alone(binary, level,
     assert fields["alpha"].min() < 0.01, "the air is gone"
 
 
+@pytest.mark.parametrize("thinc", [False, True])
 @pytest.mark.parametrize("order", ORDERS)
-def test_the_two_masses_and_the_energy_are_conserved(order, tmp_path):
+def test_the_two_masses_and_the_energy_are_conserved(order, thinc, tmp_path):
     """A periodic box conserves what the four conservation laws say it does.
 
     The volume fraction is not one of them and must not be conserved; what it
@@ -88,7 +95,7 @@ def test_the_two_masses_and_the_energy_are_conserved(order, tmp_path):
     assertion, not only the last.
     """
     out, stem = run_case(
-        "two_phase_1d", tmp_path, "advected_interface", min_level=8, max_level=8, Tf=1e-3, order=order
+        "two_phase_1d", tmp_path, "advected_interface", min_level=8, max_level=8, Tf=1e-3, order=order, thinc=thinc or None
     )
 
     totals = []
@@ -108,8 +115,9 @@ def test_the_two_masses_and_the_energy_are_conserved(order, tmp_path):
         assert abs(after - before) <= 1e-12 * abs(before), f"{what}: {before} -> {after}"
 
 
+@pytest.mark.parametrize("thinc", [False, True])
 @pytest.mark.parametrize("order", ORDERS)
-def test_the_volume_fraction_stays_in_the_unit_interval(order, tmp_path):
+def test_the_volume_fraction_stays_in_the_unit_interval(order, thinc, tmp_path):
     """Through a strong shock tube, not only through a uniform flow.
 
     A volume fraction outside [0, 1] is a mixture that contains more or less than
@@ -118,7 +126,7 @@ def test_the_volume_fraction_stays_in_the_unit_interval(order, tmp_path):
     what this really measures is how often it has to.
     """
     out, stem = run_case(
-        "two_phase_1d", tmp_path, "water_air_shock_tube", min_level=9, max_level=9, Tf=TF, order=order
+        "two_phase_1d", tmp_path, "water_air_shock_tube", min_level=9, max_level=9, Tf=TF, order=order, thinc=thinc or None
     )
     _, _, fields = read(out / stem)
 
@@ -174,6 +182,74 @@ def test_water_air_shock_tube_reference(scheme, generate_ref, tmp_path):
     compare_or_generate(out / stem, f"two_phase_1d_water_air_{scheme}", generate_ref)
 
 
+def interface_width(centers, fields):
+    """How many cells the volume fraction takes to go from one fluid to the other.
+
+    Counted as the number of distinct positions along the tube where a cell is
+    mixed, not as the number of mixed cells: the interface of the 2D run is a
+    line of them, and its width is what is being measured.
+    """
+    alpha = fields["alpha"]
+    mixed = (alpha > 0.01) & (alpha < 0.99)
+    return int(np.unique(np.round(centers[mixed, 0], 9)).size)
+
+
+@pytest.mark.parametrize("binary,level", [("two_phase_1d", 10), ("two_phase_2d", 6)])
+def test_thinc_sharpens_the_interface_without_moving_it(binary, level, tmp_path):
+    """What the sharpening is for, and what it must not cost.
+
+    The diffuse interface of the five-equation model spreads over about ten cells
+    and keeps spreading; THINC holds it on two or three, which is the number the
+    article quotes. The rest of the solution must not notice: the contact has to
+    stay where it was, and the density and the pressure have to keep the errors
+    they had against the exact solution.
+    """
+    settings = dict(min_level=level, max_level=level, Tf=TF, order=2)
+
+    diffuse_out, diffuse_stem = run_case(binary, tmp_path / "diffuse", "water_air_shock_tube", **settings)
+    sharp_out, sharp_stem = run_case(binary, tmp_path / "sharp", "water_air_shock_tube", thinc=True, **settings)
+
+    centers, volume, diffuse = read(diffuse_out / diffuse_stem)
+    sharp_centers, _, sharp = read(sharp_out / sharp_stem)
+
+    sharp_width = interface_width(sharp_centers, sharp)
+    diffuse_width = interface_width(centers, diffuse)
+
+    assert sharp_width <= 4, f"the interface is {sharp_width} cells wide"
+    assert sharp_width < 0.6 * diffuse_width, f"{diffuse_width} cells diffuse against {sharp_width} sharpened"
+
+    assert sharp["alpha"].min() >= 0.0 and sharp["alpha"].max() <= 1.0
+
+    # The contact must not have moved: a sharpening that transports the interface
+    # faster or slower than the flow does is not a sharpening, it is a bug.
+    def contact(x, fields):
+        return x[np.argmin(np.abs(fields["alpha"] - 0.5))]
+
+    dx = volume.min() ** (1.0 / centers.shape[1])
+    assert abs(contact(sharp_centers[:, 0], sharp) - contact(centers[:, 0], diffuse)) <= dx
+
+
+@pytest.mark.parametrize("order", ORDERS)
+def test_thinc_leaves_a_pure_fluid_alone(order, tmp_path):
+    """A run with no interface must be untouched by the interface sharpening.
+
+    Sod's tube carries a shock and a contact, and both are steep enough that a
+    sharpening that keyed on steepness rather than on the volume fraction would
+    reach for them. Nothing here is a mixed cell, so nothing may change: the two
+    runs have to agree to the bit.
+    """
+    settings = dict(min_level=9, max_level=9, Tf=0.2, order=order)
+
+    plain_out, plain_stem = run_case("two_phase_1d", tmp_path / "plain", "sod_x_pure", **settings)
+    sharp_out, sharp_stem = run_case("two_phase_1d", tmp_path / "sharp", "sod_x_pure", thinc=True, **settings)
+
+    _, _, plain = read(plain_out / plain_stem)
+    _, _, sharp = read(sharp_out / sharp_stem)
+
+    for name in ("rho", "pressure", "velocity", "alpha"):
+        np.testing.assert_array_equal(sharp[name], plain[name], err_msg=name)
+
+
 def test_the_reference_tells_the_solvers_apart():
     """Three identical reference files would say the run tested no Riemann solver.
 
@@ -209,8 +285,9 @@ TOLERANCE = {
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("thinc", [False, True])
 @pytest.mark.parametrize("order", ORDERS)
-def test_water_air_shock_tube_matches_its_exact_solution(order, tmp_path):
+def test_water_air_shock_tube_matches_its_exact_solution(order, thinc, tmp_path):
     """Section 6.1.1 against the exact stiffened-gas Riemann solution.
 
     Three waves, one of which is the material interface this model is for: a
@@ -220,7 +297,7 @@ def test_water_air_shock_tube_matches_its_exact_solution(order, tmp_path):
     """
     level = 10
     out, stem = run_case(
-        "two_phase_1d", tmp_path, "water_air_shock_tube", min_level=level, max_level=level, Tf=TF, order=order
+        "two_phase_1d", tmp_path, "water_air_shock_tube", min_level=level, max_level=level, Tf=TF, order=order, thinc=thinc or None
     )
     centers, volume, fields = read(out / stem)
 
