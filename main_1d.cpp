@@ -2,6 +2,7 @@
 // SPDX-License-Identifier:  BSD-3-Clause
 
 #include <cassert>
+#include <memory>
 #include <samurai/algorithm/update.hpp>
 #include <samurai/field.hpp>
 #include <samurai/io/hdf5.hpp>
@@ -14,7 +15,9 @@
 #include "euler/eos.hpp"
 #include "euler/init/cases.hpp"
 #include "euler/save.hpp"
+#include "euler/reconstruction.hpp"
 #include "euler/schemes.hpp"
+#include "euler/time_stepping.hpp"
 #include "euler/utils.hpp"
 #include "euler/variables.hpp"
 
@@ -30,6 +33,9 @@ int main(int argc, char* argv[])
     double cfl = 0.4;
     double t   = 0.;
     std::string restart_file;
+    std::size_t order = 1;
+    std::string slope_limiter   = "moncen";
+    std::string time_integrator = "auto";
     std::string scheme    = "hll";
     std::string test_case = "double_rarefaction";
     double gamma          = 0.; // only used when --gamma is given
@@ -47,6 +53,18 @@ int main(int argc, char* argv[])
     app.add_option("--scheme", scheme, "Finite volume scheme")
         ->capture_default_str()
         ->check(CLI::IsMember({"rusanov", "hll", "hllc"}))
+        ->group("Simulation parameters");
+    app.add_option("--order", order, "Order of the scheme in space: 1 for cell averages, 2 for a MUSCL reconstruction")
+        ->capture_default_str()
+        ->check(CLI::IsMember({1, 2}))
+        ->group("Simulation parameters");
+    app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"none", "minmod", "vanleer", "moncen"}))
+        ->group("Simulation parameters");
+    app.add_option("--time-integrator", time_integrator, "Time integration")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"auto", "euler", "ssprk2"}))
         ->group("Simulation parameters");
     app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
     auto* gamma_opt = app.add_option("--gamma", gamma, "Ratio of specific heats (defaults to the value of the test case)")
@@ -70,6 +88,15 @@ int main(int argc, char* argv[])
     }
     std::cout << "Using gamma = " << eos.gamma << std::endl;
 
+    // The default integrator follows the order: explicit Euler is all a
+    // first-order flux can use, and SSP-RK2 is the one that reaches second
+    // order in every dimension. Naming one explicitly always wins.
+    if (time_integrator == "auto")
+    {
+        time_integrator = default_time_integrator(order);
+    }
+    const auto integrator = time_integrator_from_name(time_integrator);
+
     if (filename.empty())
     {
         filename = fmt::format("{}_{}", test_case, scheme);
@@ -78,7 +105,7 @@ int main(int argc, char* argv[])
     // Initialize the mesh
     auto box = selected.box();
 
-    auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(2).disable_minimal_ghost_width();
+    auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(4).disable_minimal_ghost_width();
     config.periodic(selected.periodic);
     config.parse_args();
 
@@ -102,9 +129,20 @@ int main(int argc, char* argv[])
 
     std::cout << config.min_level() << " " << config.max_level() << std::endl;
 
+    // A MUSCL reconstruction reads two layers of ghost cells where the
+    // first-order flux reads one, so the boundary conditions are built to the
+    // width the scheme asks for.
+    bc::ghost_layers() = order;
     selected.bc(u, t, eos);
 
     auto unp1 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
+    auto unp2 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
+
+    // SSP-RK2 evaluates the scheme on an intermediate state, and evaluating a
+    // scheme fills the ghost cells: the scratch fields need the same boundary
+    // conditions as the solution itself.
+    unp1.copy_bc_from(u);
+    unp2.copy_bc_from(u);
 
     double dx            = mesh.cell_length(config.max_level());
     const double dt_save = Tf / static_cast<double>(nfiles);
@@ -116,8 +154,20 @@ int main(int argc, char* argv[])
     // writes primitives for post-processing and cannot be read back.
     samurai::dump(path, fmt::format("{}_restart_init", filename), mesh, u);
 
-    std::cout << "Using scheme: " << scheme << std::endl;
-    auto fv_scheme = make_first_order_scheme<decltype(u)>(scheme, eos);
+    std::cout << fmt::format("Using scheme: {}, order {}, {} in time", scheme, order, time_integrator) << std::endl;
+
+    // Built once, called with a different time step at every iteration: the
+    // Hancock predictor reads the current one through this.
+    auto dt_for_flux = std::make_shared<double>(0.);
+
+    const MusclOptions muscl_options{.limiter = slope_limiter_from_name(slope_limiter),
+                                     .hancock = integrator == TimeIntegrator::euler,
+                                     .dt      = dt_for_flux};
+
+    // Both orders are built, and the one the time loop uses is chosen per step.
+    // They are different types, a wider stencil being a different scheme.
+    auto first_order  = make_first_order_scheme<decltype(u)>(scheme, eos);
+    auto second_order = make_second_order_scheme<decltype(u)>(scheme, eos, muscl_options);
 
     auto MRadaptation = samurai::make_MRAdapt(u);
     auto mra_config   = samurai::mra_config().relative_detail(true);
@@ -143,10 +193,15 @@ int main(int argc, char* argv[])
 
         std::cout << fmt::format("iteration {}: t = {}, dt = {}", nt++, t, dt) << std::endl;
 
-        unp1.resize();
-        unp1 = u - dt * fv_scheme(u);
-
-        samurai::swap(u, unp1);
+        *dt_for_flux = dt;
+        if (order == 1)
+        {
+            advance(u, unp1, unp2, first_order, dt, integrator);
+        }
+        else
+        {
+            advance(u, unp1, unp2, second_order, dt, integrator);
+        }
 
         if (t >= static_cast<double>(nsave + 1) * dt_save || t == Tf)
         {
