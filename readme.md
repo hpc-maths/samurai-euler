@@ -360,6 +360,7 @@ two more equations.
 | `triple_point` | Section 6.1.2, as the article poses it: two gases, `gamma = 1.5` in regions 1 and 3 and 1.4 in region 2, [0,7] x [0,3], `t_f = 2.0`. `triple_point_single_gamma` in the monofluid solver is the same geometry with one gas and says at length that it is not this case. |
 | `advected_interface` | A slab of water in air, everything at one atmosphere and moving at 100 m/s. The exact solution is the initial state translated, and a scheme that advects the volume fraction inconsistently with the masses produces a pressure spike out of nothing. |
 | `sod_x_pure` | Sod's tube as a two-phase state that is one fluid everywhere. With `alpha = 1` the model is the Euler system, and the suite holds the two solvers to twelve digits of each other. |
+| `shock_bubble` | Section 6.1.3: a Mach 1.22 shock crossing a 25 mm helium bubble in a 445 x 89 mm tube. The one case of the article validated against an experiment — see below. |
 
 ```bash
 ./two_phase_1d --test-case water_air_shock_tube --min-level 10 --max-level 10 --order 2
@@ -431,6 +432,54 @@ for a shock.
 `--thinc` needs `--order 2`: there is no reconstruction to replace at first
 order.
 
+### Against an experiment: the shock-bubble interaction
+
+`shock_bubble` is section 6.1.3, and the only case in the article held against a
+laboratory rather than against another code. A Mach 1.22 shock runs down the tube
+into a helium bubble; the bubble carries sound at three times the speed of the
+air around it, so the refracted wave outruns the incident shock, the bubble caves
+in on its upstream side and drives a jet through itself. Five fronts come out of
+it, and Haas and Sturtevant measured their speeds in 1987.
+
+```bash
+python python/shock_bubble_waves.py --level 8
+```
+
+runs the case and measures the five speeds the way the article does: a snapshot
+every ten microseconds, each front read along the axis of the tube, a straight
+line fitted through its positions. The first three are one measurement rather
+than three — the leading pressure front on the centreline *is* the incident shock
+while it is right of the bubble, the refracted wave while it is inside it, and
+the transmitted wave once it is out — so the segments are separated at the edges
+of the bubble and not by eye.
+
+Level 10 is the 5120 x 1024 the article runs; level 8 takes three minutes and
+level 9 a quarter of an hour:
+
+| m/s | level 8 | level 9 | article | Haas & Sturtevant |
+| :--- | ---: | ---: | ---: | ---: |
+| shock | 417.2 | 422.4 ± 1.7 | 423.2 ± 0.6 | 410 ± 41 |
+| refracted | 946.6 | 951.6 ± 2.7 | 953 ± 7 | 900 ± 90 |
+| transmitted | 382.3 | 381.6 ± 0.2 | 381.2 ± 0.7 | 393 ± 39 |
+| downstream | 141.5 | 135.4 ± 1.8 | 141.5 ± 1.9 | 145 ± 15 |
+| jet | 221.1 | 225.5 ± 1.4 | 222.9 ± 2.2 | 230 ± 23 |
+
+Every one is inside the experiment's 10% margin at both resolutions, and at level
+9 three of the five agree with the article to two parts in a thousand. The shock
+reaches the bubble at 58.8 µs against the "about 58" the article quotes — which
+is the geometry and the initial state in a single number.
+
+Two things are worth knowing before reading those figures. The initial states are
+the article's equation (8), and taken literally they are not a shock: the
+pressure ratio is exactly Mach 1.22 but the density behind it is 1.6571 where
+Rankine-Hugoniot asks for 1.6295, which would make the front travel at 401 m/s.
+The solver settles that in the first microseconds — the discontinuity resolves
+into the shock the pressure jump calls for — and 417 is what comes out, which is
+also why the article's own 58 µs and its 423 m/s agree with each other and not
+with 401. And the speeds are wave speeds, not fine structure: they are already
+inside the experimental margin at a sixteenth of the article's resolution, where
+the schlieren pictures of its fig. 14 would not be.
+
 ### What is not there yet
 
 - **The positivity-preserving multiresolution prediction** of the monofluid
@@ -438,8 +487,9 @@ order.
   default prediction plus the admissibility floor, which clamps the volume
   fraction to [0, 1], the partial densities to non-negative and the pressure
   above the vacuum of the mixture.
-- **The shock-bubble cases** of sections 6.1.3 and 6.1.4, which need this model
-  and are out of reach on a workstation at the resolutions they are published at.
+- **The multiple-bubble case** of section 6.1.4, which is the one above at an
+  equivalent 32768² over 3.3e5 time steps: the model is there, the machine is
+  not.
 
 ## Tests
 

@@ -27,6 +27,7 @@ from util import REFERENCE, ROOT, compare_or_generate, read, run_case
 
 sys.path.insert(0, str(ROOT / "python"))
 from exact_two_phase_riemann import AIR, WATER, WATER_AIR, solution, star_state  # noqa: E402
+from shock_bubble_waves import PUBLISHED, measure, wave_speeds  # noqa: E402
 
 ORDERS = [1, 2]
 
@@ -298,3 +299,51 @@ def test_water_air_shock_tube_matches_its_exact_solution(order, thinc, tmp_path)
     dx = volume.min()
     contact = x[np.argmin(np.abs(fields["alpha"] - 0.5))]
     assert abs(contact - (DIAPHRAGM + u_star * TF)) <= 2 * dx, f"the contact is at {contact}"
+
+
+# ---------------------------------------------------------------------------
+# The one case of the article validated against an experiment
+# ---------------------------------------------------------------------------
+@pytest.mark.slow
+def test_shock_bubble_wave_speeds_match_the_experiment(tmp_path):
+    """Section 6.1.3: five wavefront velocities against Haas and Sturtevant.
+
+    A Mach 1.22 shock crosses a helium bubble and throws off five fronts whose
+    speeds were measured in a laboratory in 1987. They are what this case is
+    for: everything else in the repository is checked against an exact solution
+    or against another code, and this is checked against an experiment.
+
+    The tolerance is the experiment's own: Haas and Sturtevant quote 10%, and
+    the article reports its own numbers inside that margin. This runs at a
+    sixteenth of the article's resolution in each direction, which the speeds
+    survive -- they are wave speeds, not fine structure.
+    """
+    tf, nfiles = 360e-6, 36
+    out, stem = run_case(
+        "two_phase_2d",
+        tmp_path,
+        "shock_bubble",
+        min_level=4,
+        max_level=7,
+        Tf=tf,
+        order=2,
+        thinc=True,
+        nfiles=nfiles,
+    )
+
+    records = measure(str(out), stem, nfiles)
+    assert len(records) == nfiles, f"{len(records)} snapshots out of {nfiles}"
+
+    speeds, impact = wave_speeds(records, tf / nfiles)
+
+    # The shock has 25 mm to cover before it reaches the bubble, and the article
+    # says it takes about 58 microseconds. Getting that right is the whole
+    # geometry and the whole initial state in one number.
+    assert impact == pytest.approx(58e-6, rel=0.05), f"impact at {impact * 1e6:.1f} us"
+
+    for name, published in PUBLISHED.items():
+        measured, _ = speeds[name]
+        value, margin = published["experiment"]
+        assert abs(measured - value) <= margin, (
+            f"{name}: {measured:.1f} m/s, experiment {value} +- {margin}, article {published['article']}"
+        )

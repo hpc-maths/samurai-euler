@@ -219,15 +219,22 @@ namespace bc
         return wide() ? samurai::make_bc<Imposed<4>>(u, f) : samurai::make_bc<Imposed<2>>(u, f);
     }
 
-    // A uniform state imposed on every boundary.
-    template <class Field, class Eos>
-    auto imposed(Field& u, const PrimState<Field::dim>& state, Eos eos)
+    // A uniform state imposed on every boundary, given as the conservative
+    // vector itself. Which components those are is the model's business, so this
+    // is the one both of them go through.
+    template <class Field, class Array>
+    auto imposed_state(Field& u, const Array& cons)
     {
-        const auto cons = prim2cons<Field::dim>(state, eos);
-
         return [&]<std::size_t... I>(std::index_sequence<I...>)
         {
             return wide() ? samurai::make_bc<Imposed<4>>(u, cons[I]...) : samurai::make_bc<Imposed<2>>(u, cons[I]...);
         }(std::make_index_sequence<Field::n_comp>{});
+    }
+
+    // The same, from a monofluid primitive state.
+    template <class Field, class Eos>
+    auto imposed(Field& u, const PrimState<Field::dim>& state, Eos eos)
+    {
+        return imposed_state(u, prim2cons<Field::dim>(state, eos));
     }
 }
