@@ -65,6 +65,9 @@ This will generate output files (e.g., HDF5/XDMF) in the `results` directory (or
 
 *   `euler_1d`: 1D Euler simulation.
 *   `euler_user_pred_1d`: 1D Euler simulation with user-defined prediction.
+*   `two_phase_1d`, `two_phase_2d`: the five-equation two-phase model, a
+    different system of equations from the three above. See
+    [Two-phase flow](#two-phase-flow-the-five-equation-model).
 
 ## Command Line Options
 
@@ -300,6 +303,194 @@ python python/performance.py --levels 9 --mr-eps 1e-4 1e-3 1e-2
   column worth comparing is the sparsity index; the Mcu/s column is worth
   comparing against *itself*, between two runs of this solver.
 
+## Two-phase flow: the five-equation model
+
+`two_phase_1d` and `two_phase_2d` solve a different system from the three
+binaries above: two compressible fluids sharing the mesh, in pressure and
+velocity equilibrium, with an interface between them.
+
+```
+d_t (alpha_i rho_i) + div(alpha_i rho_i u) = 0      i = 0, 1
+d_t (rho u)         + div(rho u @ u + p I) = 0
+d_t E               + div((E + p) u)       = 0
+d_t alpha_0         + u . grad(alpha_0)    = 0
+```
+
+so `dim + 4` components per cell, against `dim + 2` for the monofluid solver.
+Each phase is a stiffened gas, and the mixture behaves as one whose coefficients
+depend on the volume fraction:
+
+```
+1 / (gamma_m - 1) = sum_i alpha_i / (gamma_i - 1)
+gamma_m pi_m / (gamma_m - 1) = sum_i alpha_i gamma_i pi_i / (gamma_i - 1)
+```
+
+Those two sums are the whole equation of state, and the fact that both are
+**linear in alpha** is what makes the model work: it is exactly what lets a
+uniform pressure survive the averaging of two fluids in one cell.
+
+### What is different in the scheme
+
+The first four equations are conservation laws and go through the Riemann solver
+the monofluid ones do, with the mixture sound speed and the two partial
+densities carried through the contact. The fifth is not a conservation law, and
+is discretized with the contact velocity `u*` the Riemann solver already
+computes:
+
+```
+alpha_i^{n+1} = alpha_i - dt/dx [ (u* alpha*)_{i+1/2} - (u* alpha*)_{i-1/2}
+                                  - alpha_i (u*_{i+1/2} - u*_{i-1/2}) ]
+```
+
+The term in `alpha_i` is the cell's own volume fraction, so the two cells an
+interface separates receive different contributions from it. samurai calls that
+a non-conservative flux and takes a pair of values per face, which is what the
+two-phase scheme returns; the four conservation laws take the conservative pair
+and are conserved to the last bit — the test suite holds them to 1e-12.
+
+`--scheme`, `--order`, `--slope-limiter` and `--time-integrator` mean what they
+mean for the monofluid solver, and the Hancock predictor is the same one with
+two more equations.
+
+### Test cases
+
+| Case | What it is |
+| :--- | :--------- |
+| `water_air_shock_tube` | Section 6.1.1 of the article: water at 1e9 Pa against air at 1e5, tube [-2, 2], diaphragm at 0.7, `t_f = 9e-4`. In 2D the domain is [-2,2] x [-0.4,0.4], where level 6 is exactly the 320 x 64 equivalent resolution the article quotes. |
+| `triple_point` | Section 6.1.2, as the article poses it: two gases, `gamma = 1.5` in regions 1 and 3 and 1.4 in region 2, [0,7] x [0,3], `t_f = 2.0`. `triple_point_single_gamma` in the monofluid solver is the same geometry with one gas and says at length that it is not this case. |
+| `advected_interface` | A slab of water in air, everything at one atmosphere and moving at 100 m/s. The exact solution is the initial state translated, and a scheme that advects the volume fraction inconsistently with the masses produces a pressure spike out of nothing. |
+| `sod_x_pure` | Sod's tube as a two-phase state that is one fluid everywhere. With `alpha = 1` the model is the Euler system, and the suite holds the two solvers to twelve digits of each other. |
+| `shock_bubble` | Section 6.1.3: a Mach 1.22 shock crossing a 25 mm helium bubble in a 445 x 89 mm tube. The one case of the article validated against an experiment — see below. |
+
+```bash
+./two_phase_1d --test-case water_air_shock_tube --min-level 10 --max-level 10 --order 2
+./two_phase_2d --test-case water_air_shock_tube --min-level 4 --max-level 6 --order 2
+./two_phase_2d --test-case triple_point --min-level 4 --max-level 8 --Tf 2.0 --order 2
+```
+
+A run writes the volume fraction, the mixture density and pressure, the velocity
+**and the two partial densities**: `alpha * rho` is not the mass of either phase
+in a mixed cell, and anything checking conservation needs the real ones.
+
+### What it is held to
+
+`python/exact_two_phase_riemann.py` solves the two-material stiffened-gas
+Riemann problem exactly, which is what the shock tube is measured against rather
+than a figure read by eye: `p* = 4.796906e5 Pa`, `u* = 491.97 m/s`,
+`rho*_water = 800.33`, `rho*_air = 2.758`. At level 10 and second order the
+solver reaches an L1 error of 1.5e-3 on the density, puts the contact within one
+cell of `x = 1.1428` and the interface on about nine cells.
+
+The interface condition is a separate test and a stricter one: on
+`advected_interface` the pressure stays uniform to 1e-11 relative and the
+velocity to 1e-14, which is round-off and not a physical smallness.
+
+### Interface sharpening: `--thinc`
+
+The diffuse interface of the five-equation model spreads over about ten cells and
+keeps spreading. THINC — Tangent of Hyperbola for INterface Capturing — holds it
+on two or three by reconstructing the volume fraction inside a mixed cell as a
+hyperbolic tangent instead of a limited straight line:
+
+```
+alpha_i(X) = 1/2 [ 1 + tanh( beta (sigma X + x_c) ) ],   X in [0, 1]
+```
+
+`sigma` says which way the interface faces, `beta` how steep it is
+(`--thinc-beta`, 1.6 by default) and `x_c` where it sits inside the cell. Only
+`x_c` is unknown, and it is fixed by requiring the profile to average to the cell
+average it came from — in closed form, so conservation is exact rather than
+approached.
+
+It replaces the reconstruction of the **volume fraction alone**. Pressure,
+velocity and the two partial densities keep their MUSCL slopes, and the total
+energy is rebuilt from the sharpened `alpha`; the mixture law being linear in
+`alpha`, a uniform pressure survives it exactly, which the interface test still
+measures at 1e-11.
+
+The steepness is weighted by the interface normal, `beta_d = beta |n_d| + 0.001`,
+so a face the interface runs parallel to is not sharpened at all — that is what
+stops the scheme from carving steps into an oblique interface. The normal comes
+from the gradient of `psi = alpha^m / (alpha^m + (1-alpha)^m)` with `m = 0.1`, and
+since a flux stencil is a line and cannot see across itself, it is computed once
+per time step over the whole mesh and read from a field.
+
+Measured on the water-air tube at level 10, second order:
+
+| | interface | contact | L1 on alpha | L1 on rho |
+| :--- | :---: | :---: | :---: | :---: |
+| diffuse | 9 cells | 1.1426 | 1.8e-3 | 1.53e-3 |
+| `--thinc` | **3 cells** | 1.1426 | 6.9e-4 | 1.54e-3 |
+
+The contact does not move, the density and pressure errors do not change, and
+the volume fraction is two and a half times more accurate. On the triple point
+the mixed cells drop from 1912 to 1147 at the same time. A run with no interface
+at all is untouched to the bit, which the suite checks on Sod's tube: the
+sharpening keys on the volume fraction, not on steepness, so it does not reach
+for a shock.
+
+`--thinc` needs `--order 2`: there is no reconstruction to replace at first
+order.
+
+### Against an experiment: the shock-bubble interaction
+
+`shock_bubble` is section 6.1.3, and the only case in the article held against a
+laboratory rather than against another code. A Mach 1.22 shock runs down the tube
+into a helium bubble; the bubble carries sound at three times the speed of the
+air around it, so the refracted wave outruns the incident shock, the bubble caves
+in on its upstream side and drives a jet through itself. Five fronts come out of
+it, and Haas and Sturtevant measured their speeds in 1987.
+
+```bash
+python python/shock_bubble_waves.py --level 8
+```
+
+runs the case and measures the five speeds the way the article does: a snapshot
+every ten microseconds, each front read along the axis of the tube, a straight
+line fitted through its positions. The first three are one measurement rather
+than three — the leading pressure front on the centreline *is* the incident shock
+while it is right of the bubble, the refracted wave while it is inside it, and
+the transmitted wave once it is out — so the segments are separated at the edges
+of the bubble and not by eye.
+
+Level 10 is the 5120 x 1024 the article runs; level 8 takes three minutes and
+level 9 a quarter of an hour:
+
+| m/s | level 8 | level 9 | article | Haas & Sturtevant |
+| :--- | ---: | ---: | ---: | ---: |
+| shock | 417.2 | 422.4 ± 1.7 | 423.2 ± 0.6 | 410 ± 41 |
+| refracted | 946.6 | 951.6 ± 2.7 | 953 ± 7 | 900 ± 90 |
+| transmitted | 382.3 | 381.6 ± 0.2 | 381.2 ± 0.7 | 393 ± 39 |
+| downstream | 141.5 | 135.4 ± 1.8 | 141.5 ± 1.9 | 145 ± 15 |
+| jet | 221.1 | 225.5 ± 1.4 | 222.9 ± 2.2 | 230 ± 23 |
+
+Every one is inside the experiment's 10% margin at both resolutions, and at level
+9 three of the five agree with the article to two parts in a thousand. The shock
+reaches the bubble at 58.8 µs against the "about 58" the article quotes — which
+is the geometry and the initial state in a single number.
+
+Two things are worth knowing before reading those figures. The initial states are
+the article's equation (8), and taken literally they are not a shock: the
+pressure ratio is exactly Mach 1.22 but the density behind it is 1.6571 where
+Rankine-Hugoniot asks for 1.6295, which would make the front travel at 401 m/s.
+The solver settles that in the first microseconds — the discontinuity resolves
+into the shock the pressure jump calls for — and 417 is what comes out, which is
+also why the article's own 58 µs and its 423 m/s agree with each other and not
+with 401. And the speeds are wave speeds, not fine structure: they are already
+inside the experimental margin at a sixteenth of the article's resolution, where
+the schlieren pictures of its fig. 14 would not be.
+
+### What is not there yet
+
+- **The positivity-preserving multiresolution prediction** of the monofluid
+  solver, which keys on the Euler layout. An adapted two-phase run has the
+  default prediction plus the admissibility floor, which clamps the volume
+  fraction to [0, 1], the partial densities to non-negative and the pressure
+  above the vacuum of the mixture.
+- **The multiple-bubble case** of section 6.1.4, which is the one above at an
+  equivalent 32768² over 3.3e5 time steps: the model is there, the machine is
+  not.
+
 ## Tests
 
 The suite drives the built binaries as subprocesses, so it checks what a user
@@ -329,6 +520,24 @@ multiresolution threshold flips a refinement decision, the mesh changes, and the
 comparison fails on another compiler without anything being wrong. Regenerate
 the references with `pytest --generate-ref`, and say in the commit message why
 they moved.
+
+`test_two_phase.py` covers the five-equation model on all three tiers at once,
+the model being new enough that splitting it across the three files would scatter
+it: the interface condition and conservation as invariants, three reference files
+for the three Riemann solvers, and the water-air tube against its exact solution
+as a slow test.
+
+Its field reference is Sod's tube and not the water-air one, for a reason worth
+knowing before adding a case of your own. A rarefaction running into a liquid at
+a gigapascal leaves, ahead of its analytic head, a foot where the density is
+1000 minus something tiny — a number built entirely by cancellation. Two hundred
+time steps later one bit of difference in a sum has grown into three parts in ten
+thousand there, and a run on another machine no longer matches: compiling the
+same source with `-ffp-contract=off` reproduces the CI runner's numbers to the
+digit. A uniform mesh is necessary for a field comparison and not sufficient —
+the case also has to be one whose answer is not built by cancellation — and the
+water-air tube is held instead to its star state, its contact and its conserved
+masses, which are.
 
 `test_validation.py` is marked slow and asserts on scalars rather than fields,
 which is what makes it usable on an adapted mesh. It measures the convergence

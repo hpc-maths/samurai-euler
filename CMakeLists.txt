@@ -31,6 +31,14 @@ target_link_libraries(euler_2d PRIVATE samurai::samurai common_defs)
 add_executable(euler_3d main_3d.cpp)
 target_link_libraries(euler_3d PRIVATE samurai::samurai common_defs)
 
+# The five-equation two-phase model. One time loop, written once and instantiated
+# per dimension, rather than one main per dimension as above.
+add_executable(two_phase_1d main_two_phase_1d.cpp)
+target_link_libraries(two_phase_1d PRIVATE samurai::samurai common_defs)
+
+add_executable(two_phase_2d main_two_phase_2d.cpp)
+target_link_libraries(two_phase_2d PRIVATE samurai::samurai common_defs)
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------

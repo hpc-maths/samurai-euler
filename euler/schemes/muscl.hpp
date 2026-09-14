@@ -89,8 +89,10 @@ auto make_muscl_scheme(Eos eos, const MusclOptions& options)
                 const auto w2 = pack<dim>(cons2prim<dim>(field[2], eos));
                 const auto w3 = pack<dim>(cons2prim<dim>(field[3], eos));
 
-                const auto slopeL = limited_slope<dim>(w1 - w0, w2 - w1, options.limiter);
-                const auto slopeR = limited_slope<dim>(w2 - w1, w3 - w2, options.limiter);
+                static constexpr std::size_t n_comp = EulerLayout<dim>::size;
+
+                const auto slopeL = limited_slope<n_comp>(w1 - w0, w2 - w1, options.limiter);
+                const auto slopeR = limited_slope<n_comp>(w2 - w1, w3 - w2, options.limiter);
 
                 ConsArray<dim> wL = w1 + 0.5 * slopeL;
                 ConsArray<dim> wR = w2 - 0.5 * slopeR;
