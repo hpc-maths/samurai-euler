@@ -81,8 +81,7 @@ The `euler_2d` executable accepts several command-line arguments to control the 
 | `--order`            | Order in space: `1` on cell averages, `2` on a MUSCL reconstruction, `3` for the one-step OSMP schemes (2D) | `1`                   |
 | `--osmp-order`       | Order of the OSMP scheme, `1` to `7` (with `--order 3`)          | `3`                      |
 | `--osmp-limiter`     | Constraints on the OSMP correction (`mp`, `tvd`, `none`)         | `mp`                     |
-| `--osmp-entropy-fix` | Harten's entropy fix of OSMP, as a fraction of `\|u_n\| + c`     | `0.1`                    |
-| `--osmp-fix-all-waves` | Apply that fix to the linear waves too                         | off                      |
+| `--osmp-harten-fix`  | Harten's entropy fix on every wave of OSMP, as a fraction of `\|u_n\| + c` | `0` (off)      |
 | `--slope-limiter`    | Slope limiter of the reconstruction (`minmod`, `vanleer`, `moncen`, `none`) | `moncen`      |
 | `--time-integrator`  | Time stepping (`auto`, `euler`, `ssprk2`, `strang`)              | `auto`                   |
 | `--test-case`        | Test case to run                                                 | `double_mach_reflection` |
@@ -183,14 +182,20 @@ high orders resist it better than the low ones. Measured on that case:
 | :--------- | :----- | :------- | :------- |
 | 256 x 64   | straight | straight | straight |
 | 512 x 128  | kinked | straight | straight |
-| 1024 x 256 | kinked | unsteady stem | straight, noisy |
+| 1024 x 256 | kinked | unstable spots on the stem | unstable spots on the stem |
 
-`--osmp-fix-all-waves --osmp-entropy-fix 0.2` extends Harten's entropy fix to
-the linear waves and gives a straight stem for the three of them on the three
-meshes. It is off by default because it is paid wherever the flow is slow
-across the sweep, where the scheme then loses its order; on the isentropic
-vortex the error grows by a quarter. The article uses another entropy
-correction, due to Khalfallah and Lerat, and reports no carbuncle for OSMP7.
+`--osmp-harten-fix 0.2` adds Harten's entropy fix on every wave and gives a
+straight stem for the three of them on the three meshes. It is off by default
+because it is paid wherever the flow is slow across the sweep, where the scheme
+then loses its order; on the isentropic vortex the error of OSMP7 grows by a
+third.
+
+The entropy correction that is always on is the one of the article, due to
+Khalfallah and Lerat (C. R. Acad. Sci. Paris 308 II, 1989): the least scalar
+dissipation for which the Roe flux satisfies Tadmor's entropy criterion. It has
+no parameter and acts where the Roe flux needs it, an expansion through a sonic
+point. It does nothing on a Mach stem, and the article reports no carbuncle for
+OSMP7 only.
 
 ### Multiresolution Parameters
 

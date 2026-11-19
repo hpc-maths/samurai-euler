@@ -56,11 +56,14 @@
 //  each side, which is also all the orders up to 6 read. Order 7 reads a third
 //  interface upwind, and needs eight cells.
 //
-//  Entropy correction: Harten's, on the acoustic waves (the article uses the
-//  one of Khalfallah and Lerat). The linear waves are left alone by default,
-//  as in the article, whose dissipation "vanishes with zero flow velocity".
-//  That is also what lets the carbuncle of the Roe flux grow on a strong shock
-//  aligned with the mesh: see OsmpOptions::entropy_fix_all_waves.
+//  Entropy correction: the one of Khalfallah and Lerat (C. R. Acad. Sci. Paris
+//  308 II, 1989), which the article uses. It adds to |lambda| of every wave of
+//  an interface the same speed a >= 0, the least for which the first-order flux
+//  satisfies Tadmor's entropy criterion: zero wherever the Roe flux is already
+//  dissipative enough, which leaves an expansion through a sonic point. It has
+//  no parameter, and it "vanishes with zero flow velocity" as the article says
+//  of its dissipation, so it does nothing against the carbuncle of the Roe
+//  flux: see OsmpOptions::harten_fix.
 // =============================================================================
 
 // What bounds the correction of each wave.
@@ -99,15 +102,14 @@ struct OsmpOptions
 
     OsmpLimiter limiter = OsmpLimiter::mp;
 
-    // Harten's entropy fix, as a fraction of |u_n| + c: below it, |lambda| is replaced by a parabola.
-    double entropy_fix = 0.1;
-
-    // Apply it to the linear waves (entropy, shear) as well as to the acoustic ones. This is the
-    // cure for the carbuncle of the Roe flux, which kinks the Mach stem of the double Mach
-    // reflection at order 2 and 3 from 512 x 128 cells on. It is off by default because it is paid
-    // wherever the flow is slow across the sweep, |u_n| < entropy_fix (|u_n| + c): there the scheme
-    // loses its order.
-    bool entropy_fix_all_waves = false;
+    // Harten's entropy fix on every wave, on top of the correction of Khalfallah and Lerat, as a
+    // fraction of |u_n| + c: below it, |lambda| is replaced by a parabola. Zero switches it off.
+    //
+    // This is the cure for the carbuncle of the Roe flux, which kinks the Mach stem of the double
+    // Mach reflection at order 2 and 3 from 512 x 128 cells on: 0.2 straightens it. It is off by
+    // default because it is paid wherever the flow is slow across the sweep,
+    // |u_n| < harten_fix (|u_n| + c): there the scheme loses its order.
+    double harten_fix = 0.;
 
     // The scheme is one-step and directional: it has to be restricted to one
     // direction and run inside a Strang splitting.
@@ -223,16 +225,90 @@ namespace osmp
             return r;
         }
 
-        // |lambda_k|, with Harten's entropy fix on the acoustic waves.
-        double speed(std::size_t k, double entropy_fix, bool all_waves) const
+        // The largest speed of the interface: no wave needs more dissipation than this (Rusanov).
+        double max_speed() const
         {
-            const double a = std::abs(lambda[k]);
-            if (!all_waves && (k == 1 || k == 2))
+            return std::abs(u[d]) + c;
+        }
+
+        /**
+         * The speed a of the entropy correction of Khalfallah and Lerat for the Roe flux between
+         * the conservative states wL and wR, dw = wR - wL having the strengths `alpha`.
+         *
+         * With v the entropy variables of the entropy -rho s / (gamma - 1), s = log(p / rho^gamma),
+         * and psi = rho u_n its potential flux, a flux h is entropy stable when dv.h <= d(psi)
+         * (Tadmor; eq. 3.5 of the note with its lemma). Adding -a/2 dw to the flux lowers dv.h by
+         * a/2 dv.dw, and dv.dw > 0, so the least a that restores the inequality is (eq. 4.7)
+         *
+         *     a = 2 max(dv.h_roe - d(psi), 0) / (dv.dw).
+         */
+        template <class Eos>
+        double entropy_correction(const PrimState<dim>& L,
+                                  const PrimState<dim>& R,
+                                  const ConsArray<dim>& wL,
+                                  const ConsArray<dim>& wR,
+                                  const std::array<double, 4>& alpha,
+                                  Eos eos) const
+        {
+            auto entropy_variables = [&](const PrimState<dim>& q)
             {
-                return a;
+                const double s  = std::log(q.p / std::pow(q.rho, gamma));
+                const double ke = 0.5 * (q.v[0] * q.v[0] + q.v[1] * q.v[1]);
+                ConsArray<dim> v;
+                v[layout::rho]    = (gamma - s) / (gamma - 1.) - q.rho * ke / q.p;
+                v[layout::rhoE]   = -q.rho / q.p;
+                v[layout::mom(0)] = q.rho * q.v[0] / q.p;
+                v[layout::mom(1)] = q.rho * q.v[1] / q.p;
+                return v;
+            };
+
+            const ConsArray<dim> vL = entropy_variables(L);
+            const ConsArray<dim> vR = entropy_variables(R);
+            const ConsArray<dim> dv = vR - vL;
+            const ConsArray<dim> dw = wR - wL;
+
+            ConsArray<dim> h = 0.5 * (compute_flux<d>(L, eos) + compute_flux<d>(R, eos));
+            for (std::size_t k = 0; k < 4; ++k)
+            {
+                h -= 0.5 * std::abs(lambda[k]) * alpha[k] * eigenvector(k);
             }
-            const double delta = entropy_fix * (std::abs(u[d]) + c);
-            return (a >= delta || delta <= 0.) ? a : 0.5 * (lambda[k] * lambda[k] + delta * delta) / delta;
+
+            double production = -dw[layout::mom(d)]; // dv.h - d(psi)
+            double rounding   = std::abs(wL[layout::mom(d)]) + std::abs(wR[layout::mom(d)]);
+            double dv_dw      = 0.;
+            for (std::size_t i = 0; i < layout::size; ++i)
+            {
+                production += dv[i] * h[i];
+                rounding += (std::abs(vL[i]) + std::abs(vR[i])) * std::abs(h[i]);
+                dv_dw += dv[i] * dw[i];
+            }
+
+            // The production is of third order in the jump, and is what is left of terms that
+            // are of order zero: v.h on each side. Below a relative jump of about 1e-4 it is
+            // their rounding error, and the quotient is anything up to 1e16 at the foot of a
+            // wave, where the jump is down to 1e-100. No correction there: it would be of the
+            // order of 1e-12 anyway.
+            const bool significant = dv_dw > 0. && production > 1e-13 * rounding;
+            return significant ? 2. * production / dv_dw : 0.;
+        }
+
+        /**
+         * |lambda_k| with the entropy corrections: Harten's parabola below harten_fix (|u_n| + c)
+         * if asked for, then the speed a of Khalfallah and Lerat on top.
+         *
+         * Bounded by |u_n| + c, the dissipation of the Rusanov flux, which is entropy stable: the
+         * quotient that gives a is only as good as its denominator, which is a rounding error
+         * between two nearly equal states.
+         */
+        double speed(std::size_t k, double a, double harten_fix) const
+        {
+            double modulus     = std::abs(lambda[k]);
+            const double delta = harten_fix * max_speed();
+            if (modulus < delta)
+            {
+                modulus = 0.5 * (modulus * modulus + delta * delta) / delta;
+            }
+            return std::min(modulus + a, max_speed());
         }
     };
 
@@ -390,7 +466,7 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
                     prim[i] = cons2prim<dim>(field[i], eos);
                 }
 
-                // Each interface in its own Roe basis: the wave strengths, |lambda| (entropy-fixed)
+                // Each interface in its own Roe basis: the wave strengths, |lambda| with the entropy corrections
                 // and the sign of lambda.
                 const osmp::RoeBasis<d> basis(prim[c], prim[c + 1], eos);
                 std::array<std::array<double, 4>, ni> strength;
@@ -400,9 +476,10 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
                 {
                     const osmp::RoeBasis<d> own = i == c ? basis : osmp::RoeBasis<d>(prim[i], prim[i + 1], eos);
                     strength[i]                 = own.strengths(field[i + 1] - field[i]);
+                    const double a              = own.entropy_correction(prim[i], prim[i + 1], field[i], field[i + 1], strength[i], eos);
                     for (std::size_t k = 0; k < 4; ++k)
                     {
-                        speed[i][k] = own.speed(k, options.entropy_fix, options.entropy_fix_all_waves);
+                        speed[i][k] = own.speed(k, a, options.harten_fix);
                         sign[i][k]  = own.lambda[k] >= 0. ? 1. : -1.;
                     }
                 }

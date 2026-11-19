@@ -147,16 +147,16 @@ def test_tvd_constraints_clip_the_extremum_and_mp_ones_do_not(tmp_path):
     [
         (7, {}),
         (5, {}),
-        (3, {"osmp_fix_all_waves": True, "osmp_entropy_fix": 0.2}),
+        (3, {"osmp_harten_fix": 0.2}),
     ],
-    ids=["osmp7", "osmp5", "osmp3-all-waves"],
+    ids=["osmp7", "osmp5", "osmp3-harten"],
 )
 def test_mach_stem_is_straight(osmp_order, options, tmp_path):
     """512 x 128 cells, where the carbuncle of the Roe flux shows.
 
     OSMP5 and OSMP7 keep the stem straight as they are. OSMP3 does not: its stem
-    runs 0.15 ahead along the wall, and what cures it is the entropy fix on the
-    linear waves, which is what is asked of it here.
+    runs 0.15 ahead along the wall, and what cures it is Harten's entropy fix on
+    every wave, which is what is asked of it here.
     """
     centers, _, fields = read(osmp(tmp_path, "double_mach_reflection", 7, osmp_order, Tf=0.2, **options))
 

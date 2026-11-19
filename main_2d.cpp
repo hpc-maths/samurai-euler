@@ -108,8 +108,7 @@ int main(int argc, char* argv[])
     std::size_t order = 1;
     int osmp_order            = 3;
     std::string osmp_limiter  = "mp";
-    double osmp_entropy_fix   = 0.1;
-    bool osmp_fix_all_waves   = false;
+    double osmp_harten_fix    = 0.;
     std::string slope_limiter   = "moncen";
     std::string time_integrator = "auto";
     std::string scheme    = "hllc";
@@ -145,13 +144,11 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->check(CLI::IsMember({"mp", "tvd", "none"}))
         ->group("Simulation parameters");
-    app.add_option("--osmp-entropy-fix", osmp_entropy_fix, "Harten's entropy fix of the one-step scheme, as a fraction of |u_n| + c")
+    app.add_option("--osmp-harten-fix",
+                   osmp_harten_fix,
+                   "Harten's entropy fix on every wave of the one-step scheme, as a fraction of |u_n| + c (0.2 against the carbuncle of the Roe flux)")
         ->capture_default_str()
-        ->check(CLI::NonNegativeNumber)
-        ->group("Simulation parameters");
-    app.add_flag("--osmp-fix-all-waves",
-                 osmp_fix_all_waves,
-                 "Apply the entropy fix of the one-step scheme to the linear waves too (against the carbuncle of the Roe flux)")
+        ->check(CLI::Range(0., 1.))
         ->group("Simulation parameters");
     app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
         ->capture_default_str()
@@ -335,12 +332,11 @@ int main(int argc, char* argv[])
     // Two types again: six cells up to order 6, eight at order 7.
     auto osmp_options = [&](int d)
     {
-        return OsmpOptions{.dt                    = dt_for_flux,
-                           .order                 = osmp_order,
-                           .limiter               = osmp_limiter_from_name(osmp_limiter),
-                           .entropy_fix           = osmp_entropy_fix,
-                           .entropy_fix_all_waves = osmp_fix_all_waves,
-                           .direction             = d};
+        return OsmpOptions{.dt         = dt_for_flux,
+                           .order      = osmp_order,
+                           .limiter    = osmp_limiter_from_name(osmp_limiter),
+                           .harten_fix = osmp_harten_fix,
+                           .direction  = d};
     };
     auto osmp_sweeps = directional(
         [&](int d)
