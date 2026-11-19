@@ -106,6 +106,9 @@ int main(int argc, char* argv[])
     double t   = 0.;
     std::string restart_file;
     std::size_t order = 1;
+    int osmp_order    = 3;
+    bool osmp_tvd     = false;
+    bool osmp_no_pos  = false;
     std::string slope_limiter   = "moncen";
     std::string time_integrator = "auto";
     std::string scheme    = "hllc";
@@ -129,10 +132,16 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->check(CLI::IsMember({"rusanov", "hll", "hllc"}))
         ->group("Simulation parameters");
-    app.add_option("--order", order, "Order of the scheme: 1 for cell averages, 2 for a MUSCL reconstruction, 3 for OSMP3 (one-step, Roe)")
+    app.add_option("--order", order, "Order of the scheme: 1 for cell averages, 2 for a MUSCL reconstruction, 3 for OSMP (one-step, Roe, see --osmp-order)")
         ->capture_default_str()
         ->check(CLI::IsMember({1, 2, 3}))
         ->group("Simulation parameters");
+    app.add_option("--osmp-order", osmp_order, "Order of the one-step scheme OSMP used by --order 3: 2 or 3")
+        ->capture_default_str()
+        ->check(CLI::IsMember({1, 2, 3}))
+        ->group("Simulation parameters");
+    app.add_flag("--osmp-no-positivity", osmp_no_pos, "Disable the positivity fallback of the one-step scheme")->group("Simulation parameters");
+    app.add_flag("--osmp-tvd", osmp_tvd, "Bound the one-step scheme by the TVD constraints instead of the MP ones")->group("Simulation parameters");
     app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
         ->capture_default_str()
         ->check(CLI::IsMember({"none", "minmod", "vanleer", "moncen"}))
@@ -302,10 +311,11 @@ int main(int argc, char* argv[])
             return make_second_order_scheme<decltype(u)>(scheme, eos, options);
         });
     // OSMP3 has no unsplit form; `third_order` only fills the argument of advance.
+    auto osmp_fallbacks     = std::make_shared<std::size_t>(0);
     auto third_order_sweeps = directional(
         [&](int d)
         {
-            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .direction = d});
+            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .positivity = !osmp_no_pos, .fallbacks = osmp_fallbacks, .direction = d});
         });
     auto third_order = third_order_sweeps[0];
 
@@ -378,6 +388,10 @@ int main(int argc, char* argv[])
     samurai::times::timers.stop("TimeLoop");
 
     metrics.report(metrics_file);
+    if (order == 3)
+    {
+        std::cout << "OSMP positivity fallbacks: " << *osmp_fallbacks << std::endl;
+    }
 
     samurai::finalize();
     return 0;

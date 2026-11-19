@@ -12,9 +12,10 @@
 
 #include "../variables.hpp"
 #include "flux.hpp"
+#include "riemann.hpp"
 
 // =============================================================================
-//  OSMP3: one-step monotonicity-preserving scheme of order 3
+//  OSMPo: one-step monotonicity-preserving scheme of order o = 2 or 3
 // -----------------------------------------------------------------------------
 //  V. Daru, C. Tenaud, High order one-step monotonicity-preserving schemes for
 //  unsteady compressible flow calculations, J. Comput. Phys. 193 (2004) 563-594.
@@ -27,10 +28,11 @@
 //      F = F_roe + 1/2 sum_k Phi_k (1 - |nu_k|) delta|f_k| r_k,
 //      delta|f_k| = |lambda_k| delta alpha_k,   nu_k = lambda_k dt / dx,
 //
-//  where Phi_k is the accuracy function of order 3 (eq. 7, with nu -> |nu_k|
-//  and r -> the ratio of the upwind wave strength to the local one)
+//  where Phi_k is the accuracy function of order o (with nu -> |nu_k| and r ->
+//  the ratio of the upwind wave strength to the local one): Lax-Wendroff at
+//  order 2, eq. 7 at order 3,
 //
-//      Phi3 = 1 - (1 + |nu|) / 3 (1 - r),
+//      Phi2 = 1,   Phi3 = 1 - (1 + |nu|) / 3 (1 - r),
 //
 //  bounded by the monotonicity-preserving constraints written on the flux
 //  differences (eq. 67-71, 37-40), with the curvature d^M4 of eq. 40.
@@ -56,12 +58,31 @@
 //  more cell on each side.
 //
 //  Harten's entropy fix is applied to the acoustic waves.
+//
+//  Not in the article: a positivity fallback to the first-order HLLC flux, see
+//  OsmpOptions::positivity. Without it the scheme fails on the Mach 10 double
+//  Mach reflection (a negative pressure near the wall), at order 2 and with the
+//  TVD constraints at order 3.
 // =============================================================================
 
 struct OsmpOptions
 {
     // The time step of the sweep, read through this pointer (see MusclOptions).
     std::shared_ptr<const double> dt;
+
+    // The order o of the accuracy function Phi^o: 2 (Lax-Wendroff, Phi^2 = 1) or 3 (eq. 7).
+    int order = 3;
+
+    // The constraints that bound Phi: the monotonicity-preserving ones (OSMP, eq. 37-40), or the
+    // TVD ones only (OSTVD, eq. 66).
+    bool tvd = false;
+
+    // Positivity fallback, which the article does not have: the interface falls back to the
+    // first-order HLLC flux when its flux would make the density or the pressure of one of its two
+    // cells negative (test of Hu, Adams and Shu: each cell alone against twice this flux).
+    // The number of fallbacks is counted in `fallbacks` when it is set.
+    bool positivity = true;
+    std::shared_ptr<std::size_t> fallbacks;
 
     // Harten's entropy fix on the acoustic waves, as a fraction of |u_n| + c.
     double entropy_fix = 0.1;
@@ -196,9 +217,14 @@ namespace osmp
     //  g:         delta|f| at this interface (same sign as the wave strength)
     //  d_md:      the curvature d^M4 at this interface, d_lc the one at the upwind interface
     //  r:         the upwind wave strength over this one
-    inline double limited_phi(double nu, double nu_up, double g, double d_md, double d_lc, double r)
+    inline double limited_phi(int order, bool tvd, double nu, double nu_up, double g, double d_md, double d_lc, double r)
     {
-        const double phi3 = 1. - (1. + nu) / 3. * (1. - r);
+        if (order == 1)
+        {
+            return 0.; // the first-order Roe flux alone
+        }
+        // The accuracy function: Lax-Wendroff at order 2, eq. 7 at order 3
+        const double phi_o = order == 2 ? 1. : 1. - (1. + nu) / 3. * (1. - r);
 
         // delta f^ul (eq. 68), delta f^md (eq. 69), delta f^lc (eq. 70)
         const double f_ul = r * (1. - nu_up) * g / nu;
@@ -212,9 +238,14 @@ namespace osmp
         const double phi_md = unit * f_md;
         const double phi_lc = unit * f_lc;
 
+        if (tvd)
+        {
+            return std::max(0., std::min({phi_ul, phi_o, phi_1}));
+        }
+
         const double phi_min = std::max(std::min(0., phi_md), std::min({0., phi_ul, phi_lc}));
         const double phi_max = std::min(std::max(phi_1, phi_md), std::max({0., phi_ul, phi_lc}));
-        return std::max(phi_min, std::min(phi3, phi_max));
+        return std::max(phi_min, std::min(phi_o, phi_max));
     }
 }
 
@@ -312,9 +343,37 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
                     const double d_md = osmp::curvature_m4(curv[2], curv[3]);
                     const double d_lc = osmp::curvature_m4(curv[up], curv[up + 1]);
 
-                    const double phi = osmp::limited_phi(nu, nu_up, g[2], d_md, d_lc, r);
+                    const double phi = osmp::limited_phi(options.order, options.tvd, nu, nu_up, g[2], d_md, d_lc, r);
 
                     F += 0.5 * phi * (1. - nu) * g[2] * rk;
+                }
+
+                if (options.positivity)
+                {
+                    const double two_dt_dx = 2. * dt_dx;
+                    auto admissible        = [&](const ConsArray<dim>& w)
+                    {
+                        if (!(w[EulerLayout<dim>::rho] > 0.))
+                        {
+                            return false;
+                        }
+                        double kinetic = 0.;
+                        for (std::size_t k = 0; k < dim; ++k)
+                        {
+                            kinetic += w[EulerLayout<dim>::mom(k)] * w[EulerLayout<dim>::mom(k)];
+                        }
+                        return w[EulerLayout<dim>::rhoE] - 0.5 * kinetic / w[EulerLayout<dim>::rho] > 0.;
+                    };
+                    const ConsArray<dim> left  = field[2] - two_dt_dx * (F - compute_flux<d>(prim[2], eos));
+                    const ConsArray<dim> right = field[3] + two_dt_dx * (F - compute_flux<d>(prim[3], eos));
+                    if (!admissible(left) || !admissible(right))
+                    {
+                        F = riemann::solve<riemann::Solver::hllc, d>(prim[2], field[2], prim[3], field[3], eos);
+                        if (options.fallbacks)
+                        {
+                            ++(*options.fallbacks);
+                        }
+                    }
                 }
 
                 flux = F;
@@ -322,7 +381,7 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
         });
 
     auto scheme = make_flux_based_scheme(osmp_flux);
-    scheme.set_name("osmp3");
+    scheme.set_name(options.order == 2 ? "osmp2" : "osmp3");
 
     return scheme;
 }
