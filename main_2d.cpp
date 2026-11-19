@@ -129,9 +129,9 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->check(CLI::IsMember({"rusanov", "hll", "hllc"}))
         ->group("Simulation parameters");
-    app.add_option("--order", order, "Order of the scheme in space: 1 for cell averages, 2 for a MUSCL reconstruction")
+    app.add_option("--order", order, "Order of the scheme: 1 for cell averages, 2 for a MUSCL reconstruction, 3 for OSMP3 (one-step, Roe)")
         ->capture_default_str()
-        ->check(CLI::IsMember({1, 2}))
+        ->check(CLI::IsMember({1, 2, 3}))
         ->group("Simulation parameters");
     app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
         ->capture_default_str()
@@ -177,6 +177,12 @@ int main(int argc, char* argv[])
     {
         time_integrator = default_time_integrator(order);
     }
+    // OSMP3 is one-step and directional: Strang splitting is the only integrator it runs in.
+    if (order == 3 && time_integrator != "strang")
+    {
+        std::cerr << "--order 3 (OSMP3) runs with --time-integrator strang only" << std::endl;
+        return EXIT_FAILURE;
+    }
     const auto integrator = time_integrator_from_name(time_integrator);
 
     if (filename.empty())
@@ -187,7 +193,10 @@ int main(int argc, char* argv[])
     // Initialize the mesh
     auto box = selected.box();
 
-    auto config = samurai::mesh_config<dim, EULER_PREDICTION_RADIUS>().min_level(8).max_level(8).max_stencil_size(4 * EULER_PREDICTION_RADIUS).disable_minimal_ghost_width();
+    // The ghosts the fluxes read: the finer-level fluxes predict their stencil from coarse cells up to
+    // 2 * radius away for the stencils of 2 and 4 cells, one more for the six cells of OSMP3.
+    const int ghost_radius = std::max(2 * EULER_PREDICTION_RADIUS, order == 3 ? 2 * EULER_PREDICTION_RADIUS + 1 : 0);
+    auto config            = samurai::mesh_config<dim, EULER_PREDICTION_RADIUS>().min_level(8).max_level(8).max_stencil_size(2 * ghost_radius).disable_minimal_ghost_width();
     config.periodic(selected.periodic);
     config.parse_args();
     config.disable_args_parse();
@@ -292,6 +301,13 @@ int main(int argc, char* argv[])
             options.direction = d;
             return make_second_order_scheme<decltype(u)>(scheme, eos, options);
         });
+    // OSMP3 has no unsplit form; `third_order` only fills the argument of advance.
+    auto third_order_sweeps = directional(
+        [&](int d)
+        {
+            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .direction = d});
+        });
+    auto third_order = third_order_sweeps[0];
 
     // The three numbers the article reports per run, measured here rather than
     // reconstructed afterwards from a log: see euler/metrics.hpp.
@@ -334,9 +350,13 @@ int main(int argc, char* argv[])
         {
             advance(u, unp1, unp2, first_order, first_order_sweeps, dt_for_flux, dt, integrator);
         }
-        else
+        else if (order == 2)
         {
             advance(u, unp1, unp2, second_order, second_order_sweeps, dt_for_flux, dt, integrator);
+        }
+        else
+        {
+            advance(u, unp1, unp2, third_order, third_order_sweeps, dt_for_flux, dt, integrator);
         }
 
         t += dt;
