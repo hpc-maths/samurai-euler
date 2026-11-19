@@ -7,62 +7,86 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include <samurai/schemes/fv.hpp>
 
 #include "../variables.hpp"
 #include "flux.hpp"
-#include "riemann.hpp"
 
 // =============================================================================
-//  OSMPo: one-step monotonicity-preserving scheme of order o = 2 or 3
+//  OSMPo: one-step monotonicity-preserving schemes of order o = 1 to 7
 // -----------------------------------------------------------------------------
 //  V. Daru, C. Tenaud, High order one-step monotonicity-preserving schemes for
 //  unsteady compressible flow calculations, J. Comput. Phys. 193 (2004) 563-594.
 //
 //  A Lax-Wendroff type scheme: time and space are discretized together, so one
-//  update of a sweep is third order in both for a scalar linear equation. The
-//  flux is the first-order Roe flux plus, for each characteristic wave k of the
-//  Roe matrix of the interface, a correction (eq. 64)
+//  update of a sweep has the same order in both for a scalar linear equation.
+//  The flux is the first-order Roe flux plus, for each characteristic wave k of
+//  the Roe matrix of the interface, a correction (eq. 64-65)
 //
-//      F = F_roe + 1/2 sum_k Phi_k (1 - |nu_k|) delta|f_k| r_k,
+//      F = F_roe + sum_k dF_k r_k,     dF_k = 1/2 Phi_k (1 - |nu_k|) delta|f_k|,
 //      delta|f_k| = |lambda_k| delta alpha_k,   nu_k = lambda_k dt / dx,
 //
-//  where Phi_k is the accuracy function of order o (with nu -> |nu_k| and r ->
-//  the ratio of the upwind wave strength to the local one): Lax-Wendroff at
-//  order 2, eq. 7 at order 3,
+//  where Phi_k is the accuracy function of order o (eq. 7, 10, 11), bounded by
+//  the monotonicity-preserving constraints (eq. 37-40, 67-71).
 //
-//      Phi2 = 1,   Phi3 = 1 - (1 + |nu|) / 3 (1 - r),
+//  Everything is written on the flux differences, as the article does for
+//  systems (eq. 67-70), and never on Phi itself: Phi is a ratio of wave
+//  strengths, and at the foot of a wave these are as small as 1e-100, where a
+//  ratio is inf or NaN and a NaN bound silently switches the limiter off. So
+//  the accuracy function is kept multiplied by delta alpha (a polynomial in the
+//  strengths of the stencil), and the bounds are compared after a
+//  multiplication by |nu|, which removes the last division of eq. 70.
 //
-//  bounded by the monotonicity-preserving constraints written on the flux
-//  differences (eq. 67-71, 37-40), with the curvature d^M4 of eq. 40.
+//  The wave strengths and the speeds of an interface are those of its own Roe
+//  matrix (Harten and Yee), for this interface and for its neighbours alike.
+//  The scheme is second order for the system, with a very low error level. The
+//  multidimensional case is a Strang splitting (section 3.2), so the scheme is
+//  meant to be run sweep by sweep.
 //
-//  All the constraints are compared in the units of Phi, Phi = 2 delta f /
-//  ((1 - |nu|) delta|f|), which removes every division by r or nu.
-//
-//  Like the article, the system is handled wave by wave in the eigenvector basis
-//  of the interface (section 3.1.1): the wave strengths of the neighbouring
-//  interfaces are the differences of the conservative variables projected on
-//  the left eigenvectors of this interface, and their speeds are the
-//  eigenvalues of their own Roe matrix. The scheme is then second order for the
-//  system, with a very low error level. The multidimensional case is a Strang
-//  splitting (section 3.2), so the scheme is meant to be run sweep by sweep.
-//
-//  Six cells per interface, numbered 0 to 5, the flux being computed between
+//  Cells of the stencil, here for six of them, the flux being computed between
 //  cells 2 and 3:
 //
 //      |  0  |  1  |  2  |  3  |  4  |  5  |
 //                        ^
-//  Interfaces 0 to 4 separate the cells i and i + 1; this one is interface 2.
-//  An interface reads the curvature of the upwind interface, which reads one
-//  more cell on each side.
+//  Interface i separates the cells i and i + 1; this one is interface 2. The
+//  limiter reads the curvature at the upwind interface, hence two interfaces on
+//  each side, which is also all the orders up to 6 read. Order 7 reads a third
+//  interface upwind, and needs eight cells.
 //
-//  Harten's entropy fix is applied to the acoustic waves.
-//
-//  Not in the article, and off by default: a positivity fallback to the
-//  first-order HLLC flux, see OsmpOptions::positivity.
+//  Entropy correction: Harten's, on the acoustic waves (the article uses the
+//  one of Khalfallah and Lerat). The linear waves are left alone by default,
+//  as in the article, whose dissipation "vanishes with zero flow velocity".
+//  That is also what lets the carbuncle of the Roe flux grow on a strong shock
+//  aligned with the mesh: see OsmpOptions::entropy_fix_all_waves.
 // =============================================================================
+
+// What bounds the correction of each wave.
+enum class OsmpLimiter
+{
+    mp,  // monotonicity-preserving constraints: OSMPo (eq. 37-40, 67-71)
+    tvd, // TVD constraints only: OSTVDo (eq. 66), which clips the extrema
+    none // no constraint: OSo (section 2.1.1), for convergence studies on smooth solutions
+};
+
+inline OsmpLimiter osmp_limiter_from_name(const std::string& name)
+{
+    if (name == "mp")
+    {
+        return OsmpLimiter::mp;
+    }
+    if (name == "tvd")
+    {
+        return OsmpLimiter::tvd;
+    }
+    if (name == "none")
+    {
+        return OsmpLimiter::none;
+    }
+    throw std::runtime_error("Unknown OSMP limiter: " + name);
+}
 
 struct OsmpOptions
 {
@@ -70,42 +94,19 @@ struct OsmpOptions
     std::shared_ptr<const double> dt;
 
     // The order o of the accuracy function Phi^o: 1 (Roe alone), 2 (Lax-Wendroff, Phi^2 = 1), 3 (eq. 7)
-    // to 7 (eq. 10-11, with a stencil of 8 cells).
+    // to 7 (eq. 10-11).
     int order = 3;
 
-    // The constraints that bound Phi: the monotonicity-preserving ones (OSMP, eq. 37-40), or the
-    // TVD ones only (OSTVD, eq. 66).
-    bool tvd = false;
+    OsmpLimiter limiter = OsmpLimiter::mp;
 
-    // No constraint at all: the unlimited OSo scheme of section 2.1.1 (for convergence studies).
-    bool unlimited = false;
-
-    // The final step of the limiter as in samurai's demo (demos/FiniteVolume/convection_nonlinear_osmp.hpp):
-    // Phi^o is kept when it lies in the MP interval [Phi_min, Phi_max], and is otherwise bounded by the TVD
-    // constraints, instead of being brought back into the MP interval (eq. 37).
-    bool demo_limiter = false;
-
-    // The wave strengths of the neighbouring interfaces in their own Roe basis (Harten-Yee, the default),
-    // or projected on the basis of this interface (false). The signed curvature of eq. 71 is consistent
-    // with the first only.
-    bool own_basis = true;
-
-    // Diagnostic only: the curvature with |lambda| instead of the signed lambda of eq. 71 (wrong for left-going waves).
-    bool unsigned_curvature = false;
-
-    // Positivity fallback, which the article does not have: the interface falls back to the
-    // first-order HLLC flux when its flux would make the density or the pressure of one of its two
-    // cells negative (test of Hu, Adams and Shu: each cell alone against twice this flux).
-    // The number of fallbacks is counted in `fallbacks` when it is set.
-    bool positivity = false;
-
-    std::shared_ptr<std::size_t> fallbacks;
-
-    // Harten's entropy fix on the acoustic waves, as a fraction of |u_n| + c.
+    // Harten's entropy fix, as a fraction of |u_n| + c: below it, |lambda| is replaced by a parabola.
     double entropy_fix = 0.1;
 
-    // Apply the entropy fix to the linear waves (entropy, shear) as well, against the carbuncle of
-    // the Roe flux on strong shocks nearly aligned with the mesh.
+    // Apply it to the linear waves (entropy, shear) as well as to the acoustic ones. This is the
+    // cure for the carbuncle of the Roe flux, which kinks the Mach stem of the double Mach
+    // reflection at order 2 and 3 from 512 x 128 cells on. It is off by default because it is paid
+    // wherever the flow is slow across the sweep, |u_n| < entropy_fix (|u_n| + c): there the scheme
+    // loses its order.
     bool entropy_fix_all_waves = false;
 
     // The scheme is one-step and directional: it has to be restricted to one
@@ -162,10 +163,12 @@ namespace osmp
             {
                 u[k] = (sl * L.v[k] + sr * R.v[k]) / (sl + sr);
             }
-            H                = (sl * HL + sr * HR) / (sl + sr);
-            const double ke  = 0.5 * (u[0] * u[0] + u[1] * u[1]);
-            c                = std::sqrt(std::max((gamma - 1.) * (H - ke), 1e-300));
-            lambda           = {u[d] - c, u[d], u[d], u[d] + c};
+            H               = (sl * HL + sr * HR) / (sl + sr);
+            const double ke = 0.5 * (u[0] * u[0] + u[1] * u[1]);
+            // Positive for two admissible states. No clamp: an inadmissible state gives a NaN that
+            // shows, where a clamped sound speed would carry on with a meaningless basis.
+            c      = std::sqrt((gamma - 1.) * (H - ke));
+            lambda = {u[d] - c, u[d], u[d], u[d] + c};
         }
 
         // The wave strengths of the conservative difference dw: the left eigenvectors applied to it.
@@ -233,102 +236,134 @@ namespace osmp
         }
     };
 
-    // The limited accuracy function Phi of wave k at the interface (eq. 7 and 37-40, written for systems in eq. 66-71).
-    //  nu, nu_up: |nu| at this interface and at the upwind one
-    //  g:         delta|f| at this interface (same sign as the wave strength)
-    //  d_md:      the curvature d^M4 at this interface, d_lc the one at the upwind interface
-    //  r:         the upwind wave strength over this one
+    // The wave strengths the accuracy function reads, numbered along the wave: `up[m - 1]` is m
+    // interfaces upwind of this one (m = 1, 2, 3), `here` is this one, `down[m - 1]` is m interfaces
+    // downwind (m = 1, 2).
+    struct Strengths
+    {
+        std::array<double, 3> up{};
+        double here = 0.;
+        std::array<double, 2> down{};
+    };
+
     /**
-     * The accuracy function Phi^o of eq. 7, 10 and 11, o = 1 (Roe alone) to 7, for |nu| = nu.
-     * a[m + 3] is the wave strength m interfaces downwind of this one (m = -3 ... 2, a[3] being this one):
-     * the ratios r of the article are ratios of consecutive strengths, so each bracket of eq. 10-11 is
-     * a finite difference of the strengths divided by a_0.
+     * The accuracy function Phi^o of eq. 7, 10 and 11 times the strength of this interface, for
+     * |nu| = nu and o = 1 (zero: Roe alone) to 7.
+     *
+     * The ratios r of the article are ratios of consecutive strengths, so each bracket of eq. 10-11
+     * times the strength is a finite difference of the strengths: no division is left.
      */
-    inline double accuracy_function(int order, double nu, const std::array<double, 6>& a)
+    inline double accuracy_times_strength(int order, double nu, const Strengths& a)
     {
         if (order <= 1)
         {
             return 0.;
         }
+        double phi = a.here; // Lax-Wendroff
         if (order == 2)
         {
-            return 1.;
+            return phi;
         }
-        const double am3 = a[0], am2 = a[1], am1 = a[2], a0 = a[3], a1 = a[4], a2 = a[5];
-        const double c3  = (1. + nu) / 3.;
-        double phi       = 1. - c3 * (a0 - am1) / a0; // eq. 7: 1 - (1 + nu) / 3 (1 - r)
-        const double c4  = c3 * (nu - 2.) / 4.;
-        if (order >= 4)
+        const double c3 = (1. + nu) / 3.;
+        phi -= c3 * (a.here - a.up[0]); // eq. 7
+        if (order == 3)
         {
-            phi += c4 * (a0 - 2. * am1 + am2) / a0; // eq. 10
+            return phi;
+        }
+        const double c4 = c3 * (nu - 2.) / 4.;
+        phi += c4 * (a.here - 2. * a.up[0] + a.up[1]); // eq. 10
+        if (order == 4)
+        {
+            return phi;
         }
         const double c5 = c4 * (nu - 3.) / 5.;
-        if (order >= 5)
+        phi -= c5 * (a.down[0] - 3. * a.here + 3. * a.up[0] - a.up[1]); // eq. 11
+        if (order == 5)
         {
-            phi -= c5 * (a1 - 3. * a0 + 3. * am1 - am2) / a0; // eq. 11
+            return phi;
         }
         const double c6 = c5 * (nu + 2.) / 6.;
-        if (order >= 6)
+        phi += c6 * (a.down[1] - 4. * a.down[0] + 6. * a.here - 4. * a.up[0] + a.up[1]);
+        if (order == 6)
         {
-            phi += c6 * (a2 - 4. * a1 + 6. * a0 - 4. * am1 + am2) / a0;
+            return phi;
         }
         const double c7 = c6 * (nu + 3.) / 7.;
-        if (order >= 7)
-        {
-            phi -= c7 * (a2 - 5. * a1 + 10. * a0 - 10. * am1 + 5. * am2 - am3) / a0;
-        }
+        phi -= c7 * (a.down[1] - 5. * a.down[0] + 10. * a.here - 10. * a.up[0] + 5. * a.up[1] - a.up[2]);
         return phi;
     }
 
-    inline double limited_phi(double phi_o, bool tvd, bool demo, double nu, double nu_up, double g, double d_md, double d_lc, double r)
+    /**
+     * The correction dF = 1/2 Phi (1 - |nu|) delta|f| of one wave, bounded by the TVD constraints
+     * (eq. 66) or by the monotonicity-preserving ones (eq. 37-39 written on the flux differences,
+     * eq. 67-70).
+     *
+     *  unlimited: the correction of the accuracy function Phi^o
+     *  nu, nu_up: |nu| at this interface (0 < nu < 1) and at the upwind one
+     *  g:         delta|f| at this interface
+     *  g_ul:      |lambda| of this interface times the strength of the upwind one
+     *  d_md:      the curvature d^M4 at this interface, d_lc the one at the upwind interface
+     *
+     * The correction has to lie in the intersection of two intervals, each the hull of the values
+     * it is given: [0, delta|f|, delta f^md] and [0, delta f^ul, delta f^lc]. For the TVD
+     * constraints these are [0, delta|f|] and [0, delta f^ul].
+     *
+     * delta f^ul and delta f^lc carry a factor 1 / |nu| (eq. 68, 70), which is unbounded for a
+     * nearly steady wave. Every value is therefore compared after a multiplication by |nu| > 0,
+     * which changes no order, and the only division left is the one that brings a bound back when
+     * it is the answer. That bound is then smaller than |nu| times the unlimited correction, so
+     * the quotient is bounded by the unlimited correction.
+     */
+    inline double
+    limited_correction(OsmpLimiter limiter, double unlimited, double nu, double nu_up, double g, double g_ul, double d_md, double d_lc)
     {
+        const double x    = nu * unlimited;
+        const double b_1  = nu * g;              // the TVD bound F in [f_j, f_j+1]
+        const double b_ul = (1. - nu_up) * g_ul; // the TVD bound F in [f_j, f^ul] (eq. 68)
 
-        // delta f^ul (eq. 68), delta f^md (eq. 69), delta f^lc (eq. 70)
-        const double f_ul = r * (1. - nu_up) * g / nu;
-        const double f_md = 0.5 * g - 0.5 * d_md;
-        const double f_lc = 0.5 * f_ul + 0.5 * (1. - nu_up) / nu * d_lc;
-
-        // In the units of Phi: Phi = 2 delta f / ((1 - |nu|) delta|f|)
-        const double unit   = 2. / ((1. - nu) * g);
-        const double phi_1  = 2. / (1. - nu); // the TVD bound F in [f_j, f_j+1]
-        const double phi_ul = unit * f_ul;    // the TVD bound F in [f_j, f_ul]
-        const double phi_md = unit * f_md;
-        const double phi_lc = unit * f_lc;
-
-        if (tvd)
+        double low  = std::max(std::min(0., b_1), std::min(0., b_ul));
+        double high = std::min(std::max(0., b_1), std::max(0., b_ul));
+        if (limiter == OsmpLimiter::mp)
         {
-            return std::max(0., std::min({phi_ul, phi_o, phi_1}));
+            const double b_md = 0.5 * nu * (g - d_md);              // eq. 69
+            const double b_lc = 0.5 * (b_ul + (1. - nu_up) * d_lc); // eq. 70
+            low               = std::max(std::min({0., b_1, b_md}), std::min({0., b_ul, b_lc}));
+            high              = std::min(std::max({0., b_1, b_md}), std::max({0., b_ul, b_lc}));
         }
 
-        const double phi_min = std::max(std::min(0., phi_md), std::min({0., phi_ul, phi_lc}));
-        const double phi_max = std::min(std::max(phi_1, phi_md), std::max({0., phi_ul, phi_lc}));
-        if (demo)
+        if (x < low)
         {
-            if (phi_o >= phi_min && phi_o <= phi_max)
-            {
-                return phi_o;
-            }
-            return std::max(0., std::min({phi_ul, phi_o, phi_1}));
+            return low / nu;
         }
-        return std::max(phi_min, std::min(phi_o, phi_max));
+        if (x > high)
+        {
+            return high / nu;
+        }
+        return unlimited;
     }
 }
 
-// stencil_size: 6 up to order 3, 8 from order 4 (the accuracy functions of order 4 to 7 read three
-// interfaces upwind and two downwind).
+// stencil_size: 6 up to order 6, 8 for order 7, which reads a third interface upwind.
 template <class Field, std::size_t stencil_size = 6, class Eos>
 auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
 {
     static constexpr std::size_t dim = Field::dim;
     static_assert(stencil_size == 6 || stencil_size == 8);
-    assert((stencil_size == 8 || options.order <= 3) && "OSMP of order 4 to 7 needs a stencil of 8 cells");
+    static_assert(dim == 2, "OSMP is written for the 2D Euler equations");
     // This interface separates the cells c and c + 1; there are stencil_size - 1 interfaces.
     static constexpr std::size_t c  = stencil_size / 2 - 1;
     static constexpr std::size_t ni = stencil_size - 1;
-    static_assert(dim == 2, "OSMP3 is written for the 2D Euler equations");
 
+    if (options.order < 1 || options.order > 7)
+    {
+        throw std::invalid_argument("OSMP: the order is between 1 and 7");
+    }
+    if (options.order == 7 && stencil_size != 8)
+    {
+        throw std::invalid_argument("OSMP7 needs a stencil of 8 cells");
+    }
     assert(options.dt && "the one-step scheme needs the time step of the sweep");
-    assert(options.direction >= 0 && "OSMP3 is directional: run it in a Strang splitting");
+    assert(options.direction >= 0 && "OSMP is directional: run it in a Strang splitting");
 
     using cfg = samurai::FluxConfig<samurai::SchemeType::NonLinear, stencil_size, Field, Field>;
 
@@ -355,35 +390,20 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
                     prim[i] = cons2prim<dim>(field[i], eos);
                 }
 
-                // The basis of this interface, and the speeds of the waves at the five interfaces.
+                // Each interface in its own Roe basis: the wave strengths, |lambda| (entropy-fixed)
+                // and the sign of lambda.
                 const osmp::RoeBasis<d> basis(prim[c], prim[c + 1], eos);
-                std::array<std::array<double, 4>, ni> speed;    // |lambda|, entropy-fixed
-                std::array<std::array<double, 4>, ni> strength; // delta alpha, in the basis of this interface
-                std::array<std::array<double, 4>, ni> sign;     // sign of lambda
+                std::array<std::array<double, 4>, ni> strength;
+                std::array<std::array<double, 4>, ni> speed;
+                std::array<std::array<double, 4>, ni> sign;
                 for (std::size_t i = 0; i < ni; ++i)
                 {
-                    const ConsArray<dim> dw = field[i + 1] - field[i];
-                    strength[i]             = basis.strengths(dw);
-                    if (i == c)
+                    const osmp::RoeBasis<d> own = i == c ? basis : osmp::RoeBasis<d>(prim[i], prim[i + 1], eos);
+                    strength[i]                 = own.strengths(field[i + 1] - field[i]);
+                    for (std::size_t k = 0; k < 4; ++k)
                     {
-                        for (std::size_t k = 0; k < 4; ++k)
-                        {
-                            speed[i][k] = basis.speed(k, options.entropy_fix, options.entropy_fix_all_waves);
-                            sign[i][k]  = basis.lambda[k] >= 0. ? 1. : -1.;
-                        }
-                    }
-                    else
-                    {
-                        const osmp::RoeBasis<d> other(prim[i], prim[i + 1], eos);
-                        if (options.own_basis)
-                        {
-                            strength[i] = other.strengths(dw);
-                        }
-                        for (std::size_t k = 0; k < 4; ++k)
-                        {
-                            speed[i][k] = other.speed(k, options.entropy_fix, options.entropy_fix_all_waves);
-                            sign[i][k]  = other.lambda[k] >= 0. ? 1. : -1.;
-                        }
+                        speed[i][k] = own.speed(k, options.entropy_fix, options.entropy_fix_all_waves);
+                        sign[i][k]  = own.lambda[k] >= 0. ? 1. : -1.;
                     }
                 }
 
@@ -392,82 +412,68 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
 
                 for (std::size_t k = 0; k < 4; ++k)
                 {
-                    // delta|f| = |lambda| delta alpha at each interface (eq. 65), and the curvature of each inner
-                    // cell, written with the SIGNED eigenvalues (eq. 71): for a left-going wave delta|f| changes
-                    // sign under the mirror x -> -x and the curvature does not, which the sign of lambda restores.
-                    std::array<double, ni> g;
-                    for (std::size_t i = 0; i < ni; ++i)
-                    {
-                        g[i] = speed[i][k] * strength[i][k];
-                    }
-                    std::array<double, stencil_size> curv{};
-                    for (std::size_t m = 1; m < ni; ++m)
-                    {
-                        curv[m] = options.unsigned_curvature ? g[m] - g[m - 1] : sign[m][k] * g[m] - sign[m - 1][k] * g[m - 1];
-                    }
-
                     const ConsArray<dim> rk = basis.eigenvector(k);
-                    F -= 0.5 * g[c] * rk;
+                    const double g          = speed[c][k] * strength[c][k]; // delta|f| (eq. 65)
+                    F -= 0.5 * g * rk;
 
+                    // No correction for a steady wave, which has none, and none beyond the CFL
+                    // condition, where the scheme is not defined.
                     const double nu = speed[c][k] * dt_dx;
-                    if (g[c] == 0. || nu <= 0. || nu >= 1.)
+                    if (options.order <= 1 || !(nu > 0. && nu < 1.))
                     {
                         continue;
                     }
 
-                    // The upwind interface: c - 1 for a right-going wave, c + 1 for a left-going one.
-                    const bool right_going = basis.lambda[k] >= 0.;
-                    const std::size_t up   = right_going ? c - 1 : c + 1;
-                    const double r         = strength[up][k] / strength[c][k];
-                    const double nu_up   = std::min(speed[up][k] * dt_dx, 1.);
-
-                    const double d_md = osmp::curvature_m4(curv[c], curv[c + 1]);
-                    const double d_lc = osmp::curvature_m4(curv[up], curv[up + 1]);
-
-                    // The strengths from 3 interfaces upwind to 2 downwind, in the direction of the wave
-                    std::array<double, 6> a{};
-                    for (int m = -3; m <= 2; ++m)
+                    // The wave reads its stencil along its own direction: s interfaces further is upwind.
+                    const int s   = basis.lambda[k] >= 0. ? -1 : 1;
+                    const auto at = [&](int m)
                     {
-                        const int i = static_cast<int>(c) + (right_going ? m : -m);
-                        if (i >= 0 && i < static_cast<int>(ni))
-                        {
-                            a[static_cast<std::size_t>(m + 3)] = strength[static_cast<std::size_t>(i)][k];
-                        }
-                    }
-                    const double phi_o = osmp::accuracy_function(options.order, nu, a);
-
-                    const double phi = options.unlimited ? phi_o : osmp::limited_phi(phi_o, options.tvd, options.demo_limiter, nu, nu_up, g[c], d_md, d_lc, r);
-
-                    // eq. 64: 1/2 Phi (1 - |nu|) delta|f| r
-                    F += 0.5 * phi * (1. - nu) * g[c] * rk;
-                }
-
-                if (options.positivity)
-                {
-                    const double two_dt_dx = 2. * dt_dx;
-                    auto admissible        = [&](const ConsArray<dim>& w)
-                    {
-                        if (!(w[EulerLayout<dim>::rho] > 0.))
-                        {
-                            return false;
-                        }
-                        double kinetic = 0.;
-                        for (std::size_t k = 0; k < dim; ++k)
-                        {
-                            kinetic += w[EulerLayout<dim>::mom(k)] * w[EulerLayout<dim>::mom(k)];
-                        }
-                        return w[EulerLayout<dim>::rhoE] - 0.5 * kinetic / w[EulerLayout<dim>::rho] > 0.;
+                        return static_cast<std::size_t>(static_cast<int>(c) + s * m);
                     };
-                    const ConsArray<dim> left  = field[c] - two_dt_dx * (F - compute_flux<d>(prim[c], eos));
-                    const ConsArray<dim> right = field[c + 1] + two_dt_dx * (F - compute_flux<d>(prim[c + 1], eos));
-                    if (!admissible(left) || !admissible(right))
+
+                    osmp::Strengths a;
+                    a.here    = strength[c][k];
+                    a.up[0]   = strength[at(1)][k];
+                    a.up[1]   = strength[at(2)][k];
+                    a.down[0] = strength[at(-1)][k];
+                    a.down[1] = strength[at(-2)][k];
+                    if constexpr (stencil_size == 8)
                     {
-                        F = riemann::solve<riemann::Solver::hllc, d>(prim[c], field[c], prim[c + 1], field[c + 1], eos);
-                        if (options.fallbacks)
-                        {
-                            ++(*options.fallbacks);
-                        }
+                        a.up[2] = strength[at(3)][k];
                     }
+
+                    // eq. 64 and 67: 1/2 Phi (1 - |nu|) delta|f|
+                    double dF = 0.5 * (1. - nu) * speed[c][k] * osmp::accuracy_times_strength(options.order, nu, a);
+
+                    if (options.limiter != OsmpLimiter::none)
+                    {
+                        // The curvature of the cell m, between the interfaces m - 1 and m, written
+                        // with the SIGNED eigenvalues (eq. 71): for a left-going wave delta|f|
+                        // changes sign under the mirror x -> -x, and so does this curvature.
+                        const auto curvature = [&](std::size_t m)
+                        {
+                            return sign[m][k] * speed[m][k] * strength[m][k] - sign[m - 1][k] * speed[m - 1][k] * strength[m - 1][k];
+                        };
+                        // d^M4 at the interface i, from its two cells (eq. 40).
+                        const auto curvature_m4 = [&](std::size_t i)
+                        {
+                            return osmp::curvature_m4(curvature(i), curvature(i + 1));
+                        };
+
+                        const std::size_t up = at(1);
+                        const double nu_up   = std::min(speed[up][k] * dt_dx, 1.);
+
+                        dF = osmp::limited_correction(options.limiter,
+                                                      dF,
+                                                      nu,
+                                                      nu_up,
+                                                      g,
+                                                      speed[c][k] * strength[up][k],
+                                                      curvature_m4(c),
+                                                      curvature_m4(up));
+                    }
+
+                    F += dF * rk;
                 }
 
                 flux = F;

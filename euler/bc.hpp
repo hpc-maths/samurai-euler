@@ -154,8 +154,8 @@ namespace bc
 {
     // How many layers of ghost cells the boundary conditions have to fill: one
     // for the first-order flux, two for the MUSCL reconstruction, three for
-    // OSMP3. Set once at
-    // startup from the order of the scheme, and read by every helper below, so
+    // OSMP and four for OSMP7. Set once at startup from the scheme, and read
+    // by every helper below, so
     // that the `bc_fn` of a test case states what the boundary is and not how
     // wide the stencil reading it will be.
     inline std::size_t& ghost_layers()

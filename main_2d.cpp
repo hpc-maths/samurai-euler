@@ -106,16 +106,10 @@ int main(int argc, char* argv[])
     double t   = 0.;
     std::string restart_file;
     std::size_t order = 1;
-    int osmp_order    = 3;
-    bool osmp_tvd     = false;
-    bool osmp_unlim   = false;
-    bool osmp_demo    = false;
-    bool osmp_projected = false;
-    bool osmp_unsigned = false;
-    bool osmp_pos     = false;
-    bool osmp_fix_all = false;
-
-    double osmp_fix   = 0.1;
+    int osmp_order            = 3;
+    std::string osmp_limiter  = "mp";
+    double osmp_entropy_fix   = 0.1;
+    bool osmp_fix_all_waves   = false;
     std::string slope_limiter   = "moncen";
     std::string time_integrator = "auto";
     std::string scheme    = "hllc";
@@ -147,14 +141,18 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->check(CLI::Range(1, 7))
         ->group("Simulation parameters");
-    app.add_flag("--osmp-positivity", osmp_pos, "Positivity fallback of the one-step scheme to HLLC (not in the article)")->group("Simulation parameters");
-    app.add_flag("--osmp-fix-all-waves", osmp_fix_all, "Apply the entropy fix of the one-step scheme to every wave")->group("Simulation parameters");
-    app.add_option("--osmp-entropy-fix", osmp_fix, "Entropy fix of the one-step scheme, as a fraction of |u_n| + c")->capture_default_str()->group("Simulation parameters");
-    app.add_flag("--osmp-unsigned-curvature", osmp_unsigned, "Diagnostic: curvature with |lambda| (the former, wrong, version)")->group("Simulation parameters");
-    app.add_flag("--osmp-projected-basis", osmp_projected, "Wave strengths of the neighbouring interfaces projected on the basis of the interface (instead of their own Roe basis)")->group("Simulation parameters");
-    app.add_flag("--osmp-demo-limiter", osmp_demo, "Final step of the MP limiter as in samurai's OSMP demo")->group("Simulation parameters");
-    app.add_flag("--osmp-unlimited", osmp_unlim, "No constraint on the one-step scheme (OSo)")->group("Simulation parameters");
-    app.add_flag("--osmp-tvd", osmp_tvd, "Bound the one-step scheme by the TVD constraints instead of the MP ones")->group("Simulation parameters");
+    app.add_option("--osmp-limiter", osmp_limiter, "Constraints on the one-step scheme: monotonicity-preserving (OSMP), TVD (OSTVD) or none (OS)")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"mp", "tvd", "none"}))
+        ->group("Simulation parameters");
+    app.add_option("--osmp-entropy-fix", osmp_entropy_fix, "Harten's entropy fix of the one-step scheme, as a fraction of |u_n| + c")
+        ->capture_default_str()
+        ->check(CLI::NonNegativeNumber)
+        ->group("Simulation parameters");
+    app.add_flag("--osmp-fix-all-waves",
+                 osmp_fix_all_waves,
+                 "Apply the entropy fix of the one-step scheme to the linear waves too (against the carbuncle of the Roe flux)")
+        ->group("Simulation parameters");
     app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
         ->capture_default_str()
         ->check(CLI::IsMember({"none", "minmod", "vanleer", "moncen"}))
@@ -199,10 +197,10 @@ int main(int argc, char* argv[])
     {
         time_integrator = default_time_integrator(order);
     }
-    // OSMP3 is one-step and directional: Strang splitting is the only integrator it runs in.
+    // OSMP is one-step and directional: Strang splitting is the only integrator it runs in.
     if (order == 3 && time_integrator != "strang")
     {
-        std::cerr << "--order 3 (OSMP3) runs with --time-integrator strang only" << std::endl;
+        std::cerr << "--order 3 (OSMP) runs with --time-integrator strang only" << std::endl;
         return EXIT_FAILURE;
     }
     const auto integrator = time_integrator_from_name(time_integrator);
@@ -216,9 +214,9 @@ int main(int argc, char* argv[])
     auto box = selected.box();
 
     // The ghosts the fluxes read: the finer-level fluxes predict their stencil from coarse cells up to
-    // 2 * radius away for the stencils of 2 and 4 cells, one more for the six cells of OSMP3.
-    // OSMP reads 3 cells on each side up to order 3, 4 beyond.
-    const int osmp_cells   = order == 3 ? (osmp_order > 3 ? 4 : 3) : 0;
+    // 2 * radius away for the stencils of 2 and 4 cells, more for the wider ones of OSMP.
+    // OSMP reads 3 cells on each side up to order 6, 4 at order 7.
+    const int osmp_cells   = order == 3 ? (osmp_order == 7 ? 4 : 3) : 0;
     const int ghost_radius = std::max(2 * EULER_PREDICTION_RADIUS, osmp_cells > 0 ? 2 * EULER_PREDICTION_RADIUS + osmp_cells - 2 : 0);
     auto config            = samurai::mesh_config<dim, EULER_PREDICTION_RADIUS>().min_level(8).max_level(8).max_stencil_size(2 * ghost_radius).disable_minimal_ghost_width();
     config.periodic(selected.periodic);
@@ -286,7 +284,15 @@ int main(int argc, char* argv[])
     // writes primitives for post-processing and cannot be read back.
     samurai::dump(path, fmt::format("{}_restart_init", filename), mesh, u);
 
-    std::cout << fmt::format("Using scheme: {}, order {}, {} in time", scheme, order, time_integrator) << std::endl;
+    if (order == 3)
+    {
+        // --scheme does not apply: the one-step scheme is built on the Roe flux.
+        std::cout << fmt::format("Using scheme: OSMP{} (roe, limiter {}), {} in time", osmp_order, osmp_limiter, time_integrator) << std::endl;
+    }
+    else
+    {
+        std::cout << fmt::format("Using scheme: {}, order {}, {} in time", scheme, order, time_integrator) << std::endl;
+    }
 
     // Built once, called with a different time step at every iteration: the
     // Hancock predictor reads the current one through this.
@@ -325,21 +331,29 @@ int main(int argc, char* argv[])
             options.direction = d;
             return make_second_order_scheme<decltype(u)>(scheme, eos, options);
         });
-    // OSMP3 has no unsplit form; `third_order` only fills the argument of advance.
-    auto osmp_fallbacks     = std::make_shared<std::size_t>(0);
-    auto third_order_sweeps = directional(
+    // OSMP has no unsplit form: the scheme outside a sweep only fills the argument of advance.
+    // Two types again: six cells up to order 6, eight at order 7.
+    auto osmp_options = [&](int d)
+    {
+        return OsmpOptions{.dt                    = dt_for_flux,
+                           .order                 = osmp_order,
+                           .limiter               = osmp_limiter_from_name(osmp_limiter),
+                           .entropy_fix           = osmp_entropy_fix,
+                           .entropy_fix_all_waves = osmp_fix_all_waves,
+                           .direction             = d};
+    };
+    auto osmp_sweeps = directional(
         [&](int d)
         {
-            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .unlimited = osmp_unlim, .demo_limiter = osmp_demo, .own_basis = !osmp_projected, .unsigned_curvature = osmp_unsigned, .positivity = osmp_pos, .fallbacks = osmp_fallbacks, .entropy_fix = osmp_fix, .entropy_fix_all_waves = osmp_fix_all, .direction = d});
+            auto options  = osmp_options(d);
+            options.order = std::min(options.order, 6);
+            return make_osmp_scheme<decltype(u)>(eos, options);
         });
-    auto third_order = third_order_sweeps[0];
-    // Order 4 to 7: a stencil of 8 cells, so another scheme type.
-    auto high_order_sweeps = directional(
+    auto osmp7_sweeps = directional(
         [&](int d)
         {
-            return make_osmp_scheme<decltype(u), 8>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .unlimited = osmp_unlim, .demo_limiter = osmp_demo, .own_basis = !osmp_projected, .unsigned_curvature = osmp_unsigned, .positivity = osmp_pos, .fallbacks = osmp_fallbacks, .entropy_fix = osmp_fix, .entropy_fix_all_waves = osmp_fix_all, .direction = d});
+            return make_osmp_scheme<decltype(u), 8>(eos, osmp_options(d));
         });
-    auto high_order = high_order_sweeps[0];
 
     // The three numbers the article reports per run, measured here rather than
     // reconstructed afterwards from a log: see euler/metrics.hpp.
@@ -386,13 +400,13 @@ int main(int argc, char* argv[])
         {
             advance(u, unp1, unp2, second_order, second_order_sweeps, dt_for_flux, dt, integrator);
         }
-        else if (osmp_order <= 3)
+        else if (osmp_order < 7)
         {
-            advance(u, unp1, unp2, third_order, third_order_sweeps, dt_for_flux, dt, integrator);
+            advance(u, unp1, unp2, osmp_sweeps[0], osmp_sweeps, dt_for_flux, dt, integrator);
         }
         else
         {
-            advance(u, unp1, unp2, high_order, high_order_sweeps, dt_for_flux, dt, integrator);
+            advance(u, unp1, unp2, osmp7_sweeps[0], osmp7_sweeps, dt_for_flux, dt, integrator);
         }
 
         t += dt;
@@ -414,10 +428,6 @@ int main(int argc, char* argv[])
     samurai::times::timers.stop("TimeLoop");
 
     metrics.report(metrics_file);
-    if (order == 3)
-    {
-        std::cout << "OSMP positivity fallbacks: " << *osmp_fallbacks << std::endl;
-    }
 
     samurai::finalize();
     return 0;

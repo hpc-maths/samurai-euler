@@ -78,7 +78,11 @@ The `euler_2d` executable accepts several command-line arguments to control the 
 | `--Ti`               | Initial time                                                     | `0.0`                    |
 | `--Tf`               | Final time                                                       | `0.25`                   |
 | `--scheme`           | Riemann solver (`rusanov`, `hll`, `hllc`)                        | `hllc`                   |
-| `--order`            | Order in space: `1` on cell averages, `2` on a MUSCL reconstruction | `1`                   |
+| `--order`            | Order in space: `1` on cell averages, `2` on a MUSCL reconstruction, `3` for the one-step OSMP schemes (2D) | `1`                   |
+| `--osmp-order`       | Order of the OSMP scheme, `1` to `7` (with `--order 3`)          | `3`                      |
+| `--osmp-limiter`     | Constraints on the OSMP correction (`mp`, `tvd`, `none`)         | `mp`                     |
+| `--osmp-entropy-fix` | Harten's entropy fix of OSMP, as a fraction of `\|u_n\| + c`     | `0.1`                    |
+| `--osmp-fix-all-waves` | Apply that fix to the linear waves too                         | off                      |
 | `--slope-limiter`    | Slope limiter of the reconstruction (`minmod`, `vanleer`, `moncen`, `none`) | `moncen`      |
 | `--time-integrator`  | Time stepping (`auto`, `euler`, `ssprk2`, `strang`)              | `auto`                   |
 | `--test-case`        | Test case to run                                                 | `double_mach_reflection` |
@@ -144,6 +148,49 @@ dimension Strang is the single Hancock step, to the bit.
 `--slope-limiter none` is unlimited and oscillates at a shock. It is there to
 measure an order on a smooth solution, where every limiter clips the extremum
 and costs a fraction of an order that says nothing about the scheme.
+
+### One-step schemes (OSMP)
+
+`--order 3` runs the one-step monotonicity-preserving schemes of Daru and
+Tenaud (J. Comput. Phys. 193, 2004), in `euler_2d` only. `--osmp-order` picks
+the order, from 1 (the Roe flux alone) to 7:
+
+```bash
+./euler_2d --test-case double_mach_reflection --order 3 --osmp-order 7 --Tf 0.2
+```
+
+The flux is the Roe flux plus one correction per characteristic wave, which
+brings a linear wave to order `o` in time and in space at once. `--scheme` and
+`--slope-limiter` therefore do not apply, and the scheme only runs in a Strang
+splitting. For the Euler system it is second order, with a low error: on the
+advected pulse, a linear wave, orders 2 to 7 are measured at 1.98, 2.95, 3.97,
+4.95, 5.95 and 6.92, limiter on.
+
+`--osmp-limiter` says what bounds the correction: `mp`, the
+monotonicity-preserving constraints, which leave a smooth extremum alone;
+`tvd`, which clips it; `none`, which oscillates at a shock and is there to
+measure an order.
+
+The stencil is six cells up to order 6 and eight at order 7.
+
+**The carbuncle.** The scheme is built on the Roe flux, which has no
+dissipation on the entropy and shear waves where the flow is slow across the
+sweep. On a strong shock aligned with the mesh this is the carbuncle: the Mach
+stem of the double Mach reflection kinks and runs ahead along the wall. The
+high orders resist it better than the low ones. Measured on that case:
+
+| cells      | OSMP3  | OSMP5    | OSMP7    |
+| :--------- | :----- | :------- | :------- |
+| 256 x 64   | straight | straight | straight |
+| 512 x 128  | kinked | straight | straight |
+| 1024 x 256 | kinked | unsteady stem | straight, noisy |
+
+`--osmp-fix-all-waves --osmp-entropy-fix 0.2` extends Harten's entropy fix to
+the linear waves and gives a straight stem for the three of them on the three
+meshes. It is off by default because it is paid wherever the flow is slow
+across the sweep, where the scheme then loses its order; on the isentropic
+vortex the error grows by a quarter. The article uses another entropy
+correction, due to Khalfallah and Lerat, and reports no carbuncle for OSMP7.
 
 ### Multiresolution Parameters
 
