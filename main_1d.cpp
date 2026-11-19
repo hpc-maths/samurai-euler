@@ -66,7 +66,7 @@ int main(int argc, char* argv[])
         ->group("Simulation parameters");
     app.add_option("--time-integrator", time_integrator, "Time integration")
         ->capture_default_str()
-        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang"}))
+        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang", "strang-halves"}))
         ->group("Simulation parameters");
     app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
     auto* gamma_opt = app.add_option("--gamma", gamma, "Ratio of specific heats (defaults to the value of the test case)")

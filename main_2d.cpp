@@ -156,7 +156,7 @@ int main(int argc, char* argv[])
         ->group("Simulation parameters");
     app.add_option("--time-integrator", time_integrator, "Time integration")
         ->capture_default_str()
-        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang"}))
+        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang", "strang-halves"}))
         ->group("Simulation parameters");
     app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
     auto* gamma_opt = app.add_option("--gamma", gamma, "Ratio of specific heats (defaults to the value of the test case)")
@@ -194,10 +194,10 @@ int main(int argc, char* argv[])
     {
         time_integrator = default_time_integrator(order);
     }
-    // OSMP is one-step and directional: Strang splitting is the only integrator it runs in.
-    if (order == 3 && time_integrator != "strang")
+    // OSMP is one-step and directional: it only runs in a directional splitting.
+    if (order == 3 && time_integrator != "strang-halves" && time_integrator != "strang")
     {
-        std::cerr << "--order 3 (OSMP) runs with --time-integrator strang only" << std::endl;
+        std::cerr << "--order 3 (OSMP) runs with --time-integrator strang-halves or strang only" << std::endl;
         return EXIT_FAILURE;
     }
     const auto integrator = time_integrator_from_name(time_integrator);

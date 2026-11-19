@@ -83,7 +83,7 @@ The `euler_2d` executable accepts several command-line arguments to control the 
 | `--osmp-limiter`     | Constraints on the OSMP correction (`mp`, `tvd`, `none`)         | `mp`                     |
 | `--osmp-harten-fix`  | Harten's entropy fix on every wave of OSMP, as a fraction of `\|u_n\| + c` | `0` (off)      |
 | `--slope-limiter`    | Slope limiter of the reconstruction (`minmod`, `vanleer`, `moncen`, `none`) | `moncen`      |
-| `--time-integrator`  | Time stepping (`auto`, `euler`, `ssprk2`, `strang`)              | `auto`                   |
+| `--time-integrator`  | Time stepping (`auto`, `euler`, `ssprk2`, `strang`, `strang-halves`) | `auto`               |
 | `--test-case`        | Test case to run                                                 | `double_mach_reflection` |
 | `--gamma`            | Ratio of specific heats; overrides the value of the test case    | (test case)              |
 | `--restart-file`     | Path to a file to restart the simulation from                    | (empty)                  |
@@ -134,7 +134,8 @@ from a limited slope, on a stencil of four cells.
 | `euler`  | One explicit step. At order 2 the flux also advances the face values half a step, which makes it MUSCL-Hancock. |
 | `ssprk2` | Two stages averaged (Heun).                                                      |
 | `strang` | One directional sweep at a time, X(dt/2) Y(dt) X(dt/2) in two dimensions.         |
-| `auto`   | Explicit Euler at order 1, Strang at order 2.                                     |
+| `strang-halves` | The same sweeps, all by half a step: X(dt/2) Y(dt/2) Y(dt/2) X(dt/2). Over two steps it is the splitting of Daru and Tenaud. |
+| `auto`   | Explicit Euler at order 1, Strang at order 2, `strang-halves` for OSMP.           |
 
 The three are not interchangeable at order 2 in more than one dimension. The
 Hancock predictor advances a face value with the equations taken normal to that
@@ -160,8 +161,9 @@ the order, from 1 (the Roe flux alone) to 7:
 
 The flux is the Roe flux plus one correction per characteristic wave, which
 brings a linear wave to order `o` in time and in space at once. `--scheme` and
-`--slope-limiter` therefore do not apply, and the scheme only runs in a Strang
-splitting. For the Euler system it is second order, with a low error: on the
+`--slope-limiter` therefore do not apply, and the scheme only runs in a
+directional splitting: `strang-halves` by default, the splitting of the
+article, or `strang`. For the Euler system it is second order, with a low error: on the
 advected pulse, a linear wave, orders 2 to 7 are measured at 1.98, 2.95, 3.97,
 4.95, 5.95 and 6.92, limiter on.
 
@@ -176,16 +178,22 @@ The stencil is six cells up to order 6 and eight at order 7.
 dissipation on the entropy and shear waves where the flow is slow across the
 sweep. On a strong shock aligned with the mesh this is the carbuncle: the Mach
 stem of the double Mach reflection kinks and runs ahead along the wall. The
-high orders resist it better than the low ones. Measured on that case:
+high orders resist it better than the low ones, and so does the splitting of the
+article, `strang-halves`, the default. Measured on that case with it:
 
-| cells      | OSMP3  | OSMP5    | OSMP7    |
-| :--------- | :----- | :------- | :------- |
-| 256 x 64   | straight | straight | straight |
-| 512 x 128  | kinked | straight | straight |
-| 1024 x 256 | kinked | unstable spots on the stem | unstable spots on the stem |
+| cells      | OSMP3     | OSMP5                      | OSMP7    |
+| :--------- | :-------- | :------------------------- | :------- |
+| 256 x 64   | straight  | straight                   | straight |
+| 512 x 128  | kinked    | straight                   | straight |
+| 1024 x 256 | destroyed | unstable spots on the stem | straight |
 
-`--osmp-harten-fix 0.2` adds Harten's entropy fix on every wave and gives a
-straight stem for the three of them on the three meshes. It is off by default
+With `--time-integrator strang`, OSMP7 has unstable spots on the stem at
+1024 x 256 too, and on an adapted mesh of the same finest level OSMP3 and OSMP5
+do not reach the final time; halving the CFL of `strang` does not bring the
+clean stem back.
+
+`--osmp-harten-fix 0.2` adds Harten's entropy fix on every wave and gave a
+straight stem for the three of them on the three meshes, measured with `strang`. It is off by default
 because it is paid wherever the flow is slow across the sweep, where the scheme
 then loses its order; on the isentropic vortex the error of OSMP7 grows by a
 third.
@@ -194,8 +202,10 @@ The entropy correction that is always on is the one of the article, due to
 Khalfallah and Lerat (C. R. Acad. Sci. Paris 308 II, 1989): the least scalar
 dissipation for which the Roe flux satisfies Tadmor's entropy criterion. It has
 no parameter and acts where the Roe flux needs it, an expansion through a sonic
-point. It does nothing on a Mach stem, and the article reports no carbuncle for
-OSMP7 only.
+point: on the transonic tube of Toro (test 1), the Roe flux alone makes an
+expansion shock of 0.09 in density without it, 0.02 with it. With
+`strang-halves` it also cleans the foot of the Mach stem of OSMP7, which
+the article credits it with.
 
 ### Multiresolution Parameters
 
