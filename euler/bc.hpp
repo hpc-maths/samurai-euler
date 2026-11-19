@@ -175,6 +175,8 @@ namespace bc
     {
         switch (ghost_layers())
         {
+            case 4:
+                return f(std::integral_constant<std::size_t, 8>{});
             case 3:
                 return f(std::integral_constant<std::size_t, 6>{});
             case 2:
