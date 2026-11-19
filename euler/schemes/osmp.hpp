@@ -82,10 +82,21 @@ struct OsmpOptions
     // cells negative (test of Hu, Adams and Shu: each cell alone against twice this flux).
     // The number of fallbacks is counted in `fallbacks` when it is set.
     bool positivity = true;
+
+    // The first-order flux the correction is added to: Roe (the article) or HLLC. With HLLC the
+    // correction removes the HLLC dissipation projected on the Roe waves, q_k, instead of the Roe one:
+    //     F = F_hllc + 1/2 sum_k Phi_k (q_k - |nu_k| |lambda_k| delta alpha_k) r_k,
+    //     q_k = l_k . 2 (F_centred - F_hllc).
+    // Phi = 1 is still Lax-Wendroff, Phi = 0 is HLLC, and q_k = |lambda_k| delta alpha_k gives back the article.
+    bool hllc_base = false;
     std::shared_ptr<std::size_t> fallbacks;
 
     // Harten's entropy fix on the acoustic waves, as a fraction of |u_n| + c.
     double entropy_fix = 0.1;
+
+    // Apply the entropy fix to the linear waves (entropy, shear) as well, against the carbuncle of
+    // the Roe flux on strong shocks nearly aligned with the mesh.
+    bool entropy_fix_all_waves = false;
 
     // The scheme is one-step and directional: it has to be restricted to one
     // direction and run inside a Strang splitting.
@@ -200,10 +211,10 @@ namespace osmp
         }
 
         // |lambda_k|, with Harten's entropy fix on the acoustic waves.
-        double speed(std::size_t k, double entropy_fix) const
+        double speed(std::size_t k, double entropy_fix, bool all_waves) const
         {
             const double a = std::abs(lambda[k]);
-            if (k == 1 || k == 2)
+            if (!all_waves && (k == 1 || k == 2))
             {
                 return a;
             }
@@ -296,7 +307,7 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
                     {
                         for (std::size_t k = 0; k < 4; ++k)
                         {
-                            speed[i][k] = basis.speed(k, options.entropy_fix);
+                            speed[i][k] = basis.speed(k, options.entropy_fix, options.entropy_fix_all_waves);
                         }
                     }
                     else
@@ -304,13 +315,21 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
                         const osmp::RoeBasis<d> other(prim[i], prim[i + 1], eos);
                         for (std::size_t k = 0; k < 4; ++k)
                         {
-                            speed[i][k] = other.speed(k, options.entropy_fix);
+                            speed[i][k] = other.speed(k, options.entropy_fix, options.entropy_fix_all_waves);
                         }
                     }
                 }
 
-                // First-order Roe flux (eq. 65)
-                ConsArray<dim> F = 0.5 * (compute_flux<d>(prim[2], eos) + compute_flux<d>(prim[3], eos));
+                // First-order flux: Roe (eq. 65), or HLLC with its dissipation projected on the Roe waves
+                const ConsArray<dim> centred = 0.5 * (compute_flux<d>(prim[2], eos) + compute_flux<d>(prim[3], eos));
+                ConsArray<dim> F             = centred;
+                std::array<double, 4> q{};
+                if (options.hllc_base)
+                {
+                    F = riemann::solve<riemann::Solver::hllc, d>(prim[2], field[2], prim[3], field[3], eos);
+                    const ConsArray<dim> twice_dissipation = 2. * (centred - F);
+                    q                                      = basis.strengths(twice_dissipation);
+                }
 
                 for (std::size_t k = 0; k < 4; ++k)
                 {
@@ -327,7 +346,11 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
                     }
 
                     const ConsArray<dim> rk = basis.eigenvector(k);
-                    F -= 0.5 * g[2] * rk;
+                    if (!options.hllc_base)
+                    {
+                        F -= 0.5 * g[2] * rk;
+                        q[k] = g[2];
+                    }
 
                     const double nu = speed[2][k] * dt_dx;
                     if (g[2] == 0. || nu <= 0. || nu >= 1.)
@@ -345,7 +368,7 @@ auto make_osmp_scheme(Eos eos, const OsmpOptions& options)
 
                     const double phi = osmp::limited_phi(options.order, options.tvd, nu, nu_up, g[2], d_md, d_lc, r);
 
-                    F += 0.5 * phi * (1. - nu) * g[2] * rk;
+                    F += 0.5 * phi * (q[k] - nu * g[2]) * rk;
                 }
 
                 if (options.positivity)

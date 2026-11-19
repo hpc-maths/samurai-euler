@@ -109,6 +109,9 @@ int main(int argc, char* argv[])
     int osmp_order    = 3;
     bool osmp_tvd     = false;
     bool osmp_no_pos  = false;
+    bool osmp_fix_all = false;
+    std::string osmp_base = "roe";
+    double osmp_fix   = 0.1;
     std::string slope_limiter   = "moncen";
     std::string time_integrator = "auto";
     std::string scheme    = "hllc";
@@ -141,6 +144,12 @@ int main(int argc, char* argv[])
         ->check(CLI::IsMember({1, 2, 3}))
         ->group("Simulation parameters");
     app.add_flag("--osmp-no-positivity", osmp_no_pos, "Disable the positivity fallback of the one-step scheme")->group("Simulation parameters");
+    app.add_flag("--osmp-fix-all-waves", osmp_fix_all, "Apply the entropy fix of the one-step scheme to every wave")->group("Simulation parameters");
+    app.add_option("--osmp-entropy-fix", osmp_fix, "Entropy fix of the one-step scheme, as a fraction of |u_n| + c")->capture_default_str()->group("Simulation parameters");
+    app.add_option("--osmp-base", osmp_base, "First-order flux of the one-step scheme")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"roe", "hllc"}))
+        ->group("Simulation parameters");
     app.add_flag("--osmp-tvd", osmp_tvd, "Bound the one-step scheme by the TVD constraints instead of the MP ones")->group("Simulation parameters");
     app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
         ->capture_default_str()
@@ -315,7 +324,7 @@ int main(int argc, char* argv[])
     auto third_order_sweeps = directional(
         [&](int d)
         {
-            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .positivity = !osmp_no_pos, .fallbacks = osmp_fallbacks, .direction = d});
+            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .positivity = !osmp_no_pos, .hllc_base = osmp_base == "hllc", .fallbacks = osmp_fallbacks, .entropy_fix = osmp_fix, .entropy_fix_all_waves = osmp_fix_all, .direction = d});
         });
     auto third_order = third_order_sweeps[0];
 
