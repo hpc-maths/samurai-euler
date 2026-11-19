@@ -187,7 +187,7 @@ int main(int argc, char* argv[])
     // Initialize the mesh
     auto box = selected.box();
 
-    auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(4).disable_minimal_ghost_width();
+    auto config = samurai::mesh_config<dim, EULER_PREDICTION_RADIUS>().min_level(8).max_level(8).max_stencil_size(4 * EULER_PREDICTION_RADIUS).disable_minimal_ghost_width();
     config.periodic(selected.periodic);
     config.parse_args();
     config.disable_args_parse();
