@@ -110,10 +110,11 @@ int main(int argc, char* argv[])
     bool osmp_tvd     = false;
     bool osmp_unlim   = false;
     bool osmp_demo    = false;
-    bool osmp_own     = false;
-    bool osmp_no_pos  = false;
+    bool osmp_projected = false;
+    bool osmp_unsigned = false;
+    bool osmp_pos     = false;
     bool osmp_fix_all = false;
-    std::string osmp_base = "roe";
+
     double osmp_fix   = 0.1;
     std::string slope_limiter   = "moncen";
     std::string time_integrator = "auto";
@@ -146,14 +147,11 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->check(CLI::Range(1, 7))
         ->group("Simulation parameters");
-    app.add_flag("--osmp-no-positivity", osmp_no_pos, "Disable the positivity fallback of the one-step scheme")->group("Simulation parameters");
+    app.add_flag("--osmp-positivity", osmp_pos, "Positivity fallback of the one-step scheme to HLLC (not in the article)")->group("Simulation parameters");
     app.add_flag("--osmp-fix-all-waves", osmp_fix_all, "Apply the entropy fix of the one-step scheme to every wave")->group("Simulation parameters");
     app.add_option("--osmp-entropy-fix", osmp_fix, "Entropy fix of the one-step scheme, as a fraction of |u_n| + c")->capture_default_str()->group("Simulation parameters");
-    app.add_option("--osmp-base", osmp_base, "First-order flux of the one-step scheme")
-        ->capture_default_str()
-        ->check(CLI::IsMember({"roe", "hllc"}))
-        ->group("Simulation parameters");
-    app.add_flag("--osmp-own-basis", osmp_own, "Wave strengths of each interface in its own Roe basis")->group("Simulation parameters");
+    app.add_flag("--osmp-unsigned-curvature", osmp_unsigned, "Diagnostic: curvature with |lambda| (the former, wrong, version)")->group("Simulation parameters");
+    app.add_flag("--osmp-projected-basis", osmp_projected, "Wave strengths of the neighbouring interfaces projected on the basis of the interface (instead of their own Roe basis)")->group("Simulation parameters");
     app.add_flag("--osmp-demo-limiter", osmp_demo, "Final step of the MP limiter as in samurai's OSMP demo")->group("Simulation parameters");
     app.add_flag("--osmp-unlimited", osmp_unlim, "No constraint on the one-step scheme (OSo)")->group("Simulation parameters");
     app.add_flag("--osmp-tvd", osmp_tvd, "Bound the one-step scheme by the TVD constraints instead of the MP ones")->group("Simulation parameters");
@@ -332,14 +330,14 @@ int main(int argc, char* argv[])
     auto third_order_sweeps = directional(
         [&](int d)
         {
-            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .unlimited = osmp_unlim, .demo_limiter = osmp_demo, .own_basis = osmp_own, .positivity = !osmp_no_pos, .hllc_base = osmp_base == "hllc", .fallbacks = osmp_fallbacks, .entropy_fix = osmp_fix, .entropy_fix_all_waves = osmp_fix_all, .direction = d});
+            return make_osmp_scheme<decltype(u)>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .unlimited = osmp_unlim, .demo_limiter = osmp_demo, .own_basis = !osmp_projected, .unsigned_curvature = osmp_unsigned, .positivity = osmp_pos, .fallbacks = osmp_fallbacks, .entropy_fix = osmp_fix, .entropy_fix_all_waves = osmp_fix_all, .direction = d});
         });
     auto third_order = third_order_sweeps[0];
     // Order 4 to 7: a stencil of 8 cells, so another scheme type.
     auto high_order_sweeps = directional(
         [&](int d)
         {
-            return make_osmp_scheme<decltype(u), 8>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .unlimited = osmp_unlim, .demo_limiter = osmp_demo, .own_basis = osmp_own, .positivity = !osmp_no_pos, .hllc_base = osmp_base == "hllc", .fallbacks = osmp_fallbacks, .entropy_fix = osmp_fix, .entropy_fix_all_waves = osmp_fix_all, .direction = d});
+            return make_osmp_scheme<decltype(u), 8>(eos, OsmpOptions{.dt = dt_for_flux, .order = osmp_order, .tvd = osmp_tvd, .unlimited = osmp_unlim, .demo_limiter = osmp_demo, .own_basis = !osmp_projected, .unsigned_curvature = osmp_unsigned, .positivity = osmp_pos, .fallbacks = osmp_fallbacks, .entropy_fix = osmp_fix, .entropy_fix_all_waves = osmp_fix_all, .direction = d});
         });
     auto high_order = high_order_sweeps[0];
 
