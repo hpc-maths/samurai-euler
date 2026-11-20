@@ -106,6 +106,9 @@ int main(int argc, char* argv[])
     double t   = 0.;
     std::string restart_file;
     std::size_t order = 1;
+    int osmp_order            = 3;
+    std::string osmp_limiter  = "mp";
+    double osmp_harten_fix    = 0.;
     std::string slope_limiter   = "moncen";
     std::string time_integrator = "auto";
     std::string scheme    = "hllc";
@@ -129,9 +132,23 @@ int main(int argc, char* argv[])
         ->capture_default_str()
         ->check(CLI::IsMember({"rusanov", "hll", "hllc"}))
         ->group("Simulation parameters");
-    app.add_option("--order", order, "Order of the scheme in space: 1 for cell averages, 2 for a MUSCL reconstruction")
+    app.add_option("--order", order, "Order of the scheme: 1 for cell averages, 2 for a MUSCL reconstruction, 3 for OSMP (one-step, Roe, see --osmp-order)")
         ->capture_default_str()
-        ->check(CLI::IsMember({1, 2}))
+        ->check(CLI::IsMember({1, 2, 3}))
+        ->group("Simulation parameters");
+    app.add_option("--osmp-order", osmp_order, "Order of the one-step scheme OSMP used by --order 3: 1 (Roe alone) to 7")
+        ->capture_default_str()
+        ->check(CLI::Range(1, 7))
+        ->group("Simulation parameters");
+    app.add_option("--osmp-limiter", osmp_limiter, "Constraints on the one-step scheme: monotonicity-preserving (OSMP), TVD (OSTVD) or none (OS)")
+        ->capture_default_str()
+        ->check(CLI::IsMember({"mp", "tvd", "none"}))
+        ->group("Simulation parameters");
+    app.add_option("--osmp-harten-fix",
+                   osmp_harten_fix,
+                   "Harten's entropy fix on every wave of the one-step scheme, as a fraction of |u_n| + c (0.2 against the carbuncle of the Roe flux)")
+        ->capture_default_str()
+        ->check(CLI::Range(0., 1.))
         ->group("Simulation parameters");
     app.add_option("--slope-limiter", slope_limiter, "Slope limiter of the MUSCL reconstruction")
         ->capture_default_str()
@@ -139,7 +156,7 @@ int main(int argc, char* argv[])
         ->group("Simulation parameters");
     app.add_option("--time-integrator", time_integrator, "Time integration")
         ->capture_default_str()
-        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang"}))
+        ->check(CLI::IsMember({"auto", "euler", "ssprk2", "strang", "strang-halves"}))
         ->group("Simulation parameters");
     app.add_option("--test-case", test_case, "Test case")->capture_default_str()->check(CLI::IsMember(available))->group("Simulation parameters");
     auto* gamma_opt = app.add_option("--gamma", gamma, "Ratio of specific heats (defaults to the value of the test case)")
@@ -177,6 +194,12 @@ int main(int argc, char* argv[])
     {
         time_integrator = default_time_integrator(order);
     }
+    // OSMP is one-step and directional: it only runs in a directional splitting.
+    if (order == 3 && time_integrator != "strang-halves" && time_integrator != "strang")
+    {
+        std::cerr << "--order 3 (OSMP) runs with --time-integrator strang-halves or strang only" << std::endl;
+        return EXIT_FAILURE;
+    }
     const auto integrator = time_integrator_from_name(time_integrator);
 
     if (filename.empty())
@@ -187,7 +210,12 @@ int main(int argc, char* argv[])
     // Initialize the mesh
     auto box = selected.box();
 
-    auto config = samurai::mesh_config<dim>().min_level(8).max_level(8).max_stencil_size(4).disable_minimal_ghost_width();
+    // The ghosts the fluxes read: the finer-level fluxes predict their stencil from coarse cells up to
+    // 2 * radius away for the stencils of 2 and 4 cells, more for the wider ones of OSMP.
+    // OSMP reads 3 cells on each side up to order 6, 4 at order 7.
+    const int osmp_cells   = order == 3 ? (osmp_order == 7 ? 4 : 3) : 0;
+    const int ghost_radius = std::max(2 * EULER_PREDICTION_RADIUS, osmp_cells > 0 ? 2 * EULER_PREDICTION_RADIUS + osmp_cells - 2 : 0);
+    auto config            = samurai::mesh_config<dim, EULER_PREDICTION_RADIUS>().min_level(8).max_level(8).max_stencil_size(2 * ghost_radius).disable_minimal_ghost_width();
     config.periodic(selected.periodic);
     config.parse_args();
     config.disable_args_parse();
@@ -231,7 +259,7 @@ int main(int argc, char* argv[])
     // A MUSCL reconstruction reads two layers of ghost cells where the
     // first-order flux reads one, so the boundary conditions are built to the
     // width the scheme asks for.
-    bc::ghost_layers() = order;
+    bc::ghost_layers() = order == 3 ? static_cast<std::size_t>(osmp_cells) : order;
     init_bc(u, t, test_case, eos);
 
     auto unp1 = samurai::make_vector_field<double, 2 + dim>("euler", mesh);
@@ -253,7 +281,15 @@ int main(int argc, char* argv[])
     // writes primitives for post-processing and cannot be read back.
     samurai::dump(path, fmt::format("{}_restart_init", filename), mesh, u);
 
-    std::cout << fmt::format("Using scheme: {}, order {}, {} in time", scheme, order, time_integrator) << std::endl;
+    if (order == 3)
+    {
+        // --scheme does not apply: the one-step scheme is built on the Roe flux.
+        std::cout << fmt::format("Using scheme: OSMP{} (roe, limiter {}), {} in time", osmp_order, osmp_limiter, time_integrator) << std::endl;
+    }
+    else
+    {
+        std::cout << fmt::format("Using scheme: {}, order {}, {} in time", scheme, order, time_integrator) << std::endl;
+    }
 
     // Built once, called with a different time step at every iteration: the
     // Hancock predictor reads the current one through this.
@@ -291,6 +327,28 @@ int main(int argc, char* argv[])
             auto options      = muscl_options;
             options.direction = d;
             return make_second_order_scheme<decltype(u)>(scheme, eos, options);
+        });
+    // OSMP has no unsplit form: the scheme outside a sweep only fills the argument of advance.
+    // Two types again: six cells up to order 6, eight at order 7.
+    auto osmp_options = [&](int d)
+    {
+        return OsmpOptions{.dt         = dt_for_flux,
+                           .order      = osmp_order,
+                           .limiter    = osmp_limiter_from_name(osmp_limiter),
+                           .harten_fix = osmp_harten_fix,
+                           .direction  = d};
+    };
+    auto osmp_sweeps = directional(
+        [&](int d)
+        {
+            auto options  = osmp_options(d);
+            options.order = std::min(options.order, 6);
+            return make_osmp_scheme<decltype(u)>(eos, options);
+        });
+    auto osmp7_sweeps = directional(
+        [&](int d)
+        {
+            return make_osmp_scheme<decltype(u), 8>(eos, osmp_options(d));
         });
 
     // The three numbers the article reports per run, measured here rather than
@@ -334,9 +392,17 @@ int main(int argc, char* argv[])
         {
             advance(u, unp1, unp2, first_order, first_order_sweeps, dt_for_flux, dt, integrator);
         }
-        else
+        else if (order == 2)
         {
             advance(u, unp1, unp2, second_order, second_order_sweeps, dt_for_flux, dt, integrator);
+        }
+        else if (osmp_order < 7)
+        {
+            advance(u, unp1, unp2, osmp_sweeps[0], osmp_sweeps, dt_for_flux, dt, integrator);
+        }
+        else
+        {
+            advance(u, unp1, unp2, osmp7_sweeps[0], osmp7_sweeps, dt_for_flux, dt, integrator);
         }
 
         t += dt;

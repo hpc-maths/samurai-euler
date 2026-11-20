@@ -131,14 +131,11 @@ namespace test_case::double_mach_reflection
         // Bottom: the post-shock state upstream of the ramp foot, a wall
         // downstream of it, at the width the scheme reads.
         const auto inflow = prim2cons<2>(left_state, eos);
-        if (bc::wide())
-        {
-            samurai::make_bc<RampBottom<4>>(u, inflow[0], inflow[1], inflow[2], inflow[3])->on(bottom);
-        }
-        else
-        {
-            samurai::make_bc<RampBottom<2>>(u, inflow[0], inflow[1], inflow[2], inflow[3])->on(bottom);
-        }
+        bc::with_stencil_size(
+            [&](auto size)
+            {
+                samurai::make_bc<RampBottom<decltype(size)::value>>(u, inflow[0], inflow[1], inflow[2], inflow[3])->on(bottom);
+            });
 
         // Top: follows the analytic shock position, hence the dependence on t.
         bc::imposed(u,

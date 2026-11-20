@@ -8,6 +8,7 @@
 #include "eos.hpp"
 #include "schemes/godunov.hpp"
 #include "schemes/muscl.hpp"
+#include "schemes/osmp.hpp"
 
 // =============================================================================
 //  Choosing a scheme

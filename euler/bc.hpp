@@ -153,8 +153,9 @@ struct Outflow
 namespace bc
 {
     // How many layers of ghost cells the boundary conditions have to fill: one
-    // for the first-order flux, two for the MUSCL reconstruction. Set once at
-    // startup from the order of the scheme, and read by every helper below, so
+    // for the first-order flux, two for the MUSCL reconstruction, three for
+    // OSMP and four for OSMP7. Set once at startup from the scheme, and read
+    // by every helper below, so
     // that the `bc_fn` of a test case states what the boundary is and not how
     // wide the stencil reading it will be.
     inline std::size_t& ghost_layers()
@@ -168,6 +169,23 @@ namespace bc
         return ghost_layers() > 1;
     }
 
+    // Calls f with the boundary stencil size, 2 * ghost_layers(), as a compile-time constant.
+    template <class F>
+    decltype(auto) with_stencil_size(F&& f)
+    {
+        switch (ghost_layers())
+        {
+            case 4:
+                return f(std::integral_constant<std::size_t, 8>{});
+            case 3:
+                return f(std::integral_constant<std::size_t, 6>{});
+            case 2:
+                return f(std::integral_constant<std::size_t, 4>{});
+            default:
+                return f(std::integral_constant<std::size_t, 2>{});
+        }
+    }
+
     // Outflow (non-reflecting to first order): the boundary cell repeated into
     // every ghost. The one-layer case still goes through samurai's Neumann,
     // which leaves a first-order run unchanged to the last bit.
@@ -176,7 +194,11 @@ namespace bc
     {
         if (wide())
         {
-            return samurai::make_bc<Outflow<4>>(u);
+            return with_stencil_size(
+                [&](auto size)
+                {
+                    return samurai::make_bc<Outflow<decltype(size)::value>>(u);
+                });
         }
 
         return [&]<std::size_t... I>(std::index_sequence<I...>)
@@ -189,7 +211,11 @@ namespace bc
     template <class Field>
     auto wall(Field& u)
     {
-        return wide() ? samurai::make_bc<Reflective<4>>(u) : samurai::make_bc<Reflective<2>>(u);
+        return with_stencil_size(
+            [&](auto size)
+            {
+                return samurai::make_bc<Reflective<decltype(size)::value>>(u);
+            });
     }
 
     // An imposed state given by a function of the boundary cell. This is how a
@@ -206,7 +232,11 @@ namespace bc
     template <class Field>
     auto imposed(Field& u, const typename samurai::FunctionBc<Field>::function_t& f)
     {
-        return wide() ? samurai::make_bc<Imposed<4>>(u, f) : samurai::make_bc<Imposed<2>>(u, f);
+        return with_stencil_size(
+            [&](auto size)
+            {
+                return samurai::make_bc<Imposed<decltype(size)::value>>(u, f);
+            });
     }
 
     // A uniform state imposed on every boundary.
@@ -217,7 +247,11 @@ namespace bc
 
         return [&]<std::size_t... I>(std::index_sequence<I...>)
         {
-            return wide() ? samurai::make_bc<Imposed<4>>(u, cons[I]...) : samurai::make_bc<Imposed<2>>(u, cons[I]...);
+            return with_stencil_size(
+                [&](auto size)
+                {
+                    return samurai::make_bc<Imposed<decltype(size)::value>>(u, cons[I]...);
+                });
         }(std::make_index_sequence<Field::n_comp>{});
     }
 }

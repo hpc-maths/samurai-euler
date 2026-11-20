@@ -13,7 +13,7 @@
 // =============================================================================
 //  Time integration
 // -----------------------------------------------------------------------------
-//  Three integrators:
+//  Four integrators:
 //
 //      euler   one explicit step. First order on its own; with the Hancock
 //              predictor in the flux it is the MUSCL-Hancock scheme, second
@@ -25,6 +25,12 @@
 //              second order. Every sweep is genuinely one-dimensional, which is
 //              the one setting where the Hancock predictor is complete. In one
 //              dimension it is the single Hancock step, to the bit.
+//      strang-halves
+//              the same sweeps, every one by half a step: X(dt/2) Y(dt/2)
+//              Y(dt/2) X(dt/2) in two dimensions, X Y Z Z Y X in three. Over
+//              two steps it is the L_x L_y L_y L_x of Daru and Tenaud (eq. 73 of
+//              J. Comput. Phys. 193, 2004), the splitting of the one-step OSMP
+//              schemes. In one dimension it is the single sweep of `strang`.
 //
 //  Measured: on the advected pulse, in one dimension, MUSCL-Hancock converges
 //  at order 2.01 and is about twice as accurate as SSP-RK2 at equal
@@ -47,7 +53,8 @@
 //  times smaller than SSP-RK2 at every resolution measured. It also brings a
 //  splitting error of its own, which is second order and symmetric.
 //
-//  Hence `auto`: explicit Euler at order 1, Strang at order 2. In one dimension
+//  Hence `auto`: explicit Euler at order 1, Strang at order 2, and
+//  strang-halves for the one-step OSMP schemes (order 3). In one dimension
 //  Strang is the single Hancock step, so `auto` is the right scheme there too,
 //  and SSP-RK2 stays available as the counter-check that owes nothing to a
 //  predictor or to a sweep order.
@@ -57,14 +64,22 @@ enum class TimeIntegrator
 {
     euler,
     ssprk2,
-    strang
+    strang,
+    strang_halves
 };
 
 // What `--time-integrator auto` means: the integrator that gives the scheme the
-// order it is being asked for, and the most accurate of those that do.
+// order it is being asked for, and the most accurate of those that do. The
+// one-step OSMP schemes (order 3) take the splitting of their article: on the
+// double Mach reflection, OSMP7 keeps a clean Mach stem with it and not with
+// `strang`, even at a CFL halved so that its y sweeps match.
 inline std::string default_time_integrator(std::size_t order)
 {
-    return order == 1 ? "euler" : "strang";
+    if (order == 1)
+    {
+        return "euler";
+    }
+    return order == 3 ? "strang-halves" : "strang";
 }
 
 inline TimeIntegrator time_integrator_from_name(const std::string& name)
@@ -80,6 +95,10 @@ inline TimeIntegrator time_integrator_from_name(const std::string& name)
     if (name == "strang")
     {
         return TimeIntegrator::strang;
+    }
+    if (name == "strang-halves")
+    {
+        return TimeIntegrator::strang_halves;
     }
     throw std::runtime_error("Unknown time integrator: " + name);
 }
@@ -115,7 +134,7 @@ void advance(Field& u,
         return;
     }
 
-    if (integrator == TimeIntegrator::strang)
+    if (integrator == TimeIntegrator::strang || integrator == TimeIntegrator::strang_halves)
     {
         auto sweep = [&](std::size_t d, double tau)
         {
@@ -126,13 +145,21 @@ void advance(Field& u,
         };
 
         // Half a step along every direction but the last, a whole one along the
-        // last, then the halves again in reverse. In one dimension this is a
-        // single full sweep, and the two loops are empty.
+        // last (two halves for strang-halves), then the halves again in reverse.
+        // In one dimension this is a single full sweep, and the two loops are empty.
         for (std::size_t d = 0; d + 1 < Field::dim; ++d)
         {
             sweep(d, 0.5 * dt);
         }
-        sweep(Field::dim - 1, dt);
+        if (integrator == TimeIntegrator::strang_halves && Field::dim > 1)
+        {
+            sweep(Field::dim - 1, 0.5 * dt);
+            sweep(Field::dim - 1, 0.5 * dt);
+        }
+        else
+        {
+            sweep(Field::dim - 1, dt);
+        }
         for (std::size_t d = Field::dim - 1; d-- > 0;)
         {
             sweep(d, 0.5 * dt);
