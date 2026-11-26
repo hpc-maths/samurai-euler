@@ -82,7 +82,15 @@ void init_sol(Field& u, auto& config, int jump, auto& mra_config, PredFn&& predi
                                   });
                           });
         config.max_level()++;
-        mesh = {cl, config};
+        // A mesh rebuilt from its cells computes its domain from them and no longer
+        // knows that it is a box. samurai then treats it as a domain with a hole,
+        // which is much slower at the boundary, so say it again.
+        const bool box_domain = mesh.domain().is_box();
+        mesh                  = {cl, config};
+        if (box_domain)
+        {
+            mesh.box_like();
+        }
 
         std::cout << "Refining to level " << mesh.max_level() << std::endl;
         init();
