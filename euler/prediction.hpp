@@ -3,6 +3,18 @@
 
 #pragma once
 
+template <std::size_t dim, class TInterval>
+class Volume_projection_op;
+
+namespace samurai
+{
+    template <class Mesh, class T, std::size_t N>
+    auto projection(VectorField<Mesh, T, N>& field)
+    {
+        return make_field_operator_function<Volume_projection_op>(field, field, map_radial);
+    }
+}
+
 #include <samurai/numeric/prediction.hpp>
 #include <samurai/operators_base.hpp>
 
@@ -137,6 +149,60 @@ class Euler_prediction_op : public samurai::field_operator_base<dim, TInterval>
                                                  detail::cube_children<dim>());
                                          });
             }
+        }
+    }
+};
+
+template <std::size_t dim, class TInterval>
+class Volume_projection_op : public samurai::field_operator_base<dim, TInterval>
+{
+  public:
+    INIT_OPERATOR(Volume_projection_op)
+
+    inline void operator()(samurai::Dim<dim>, auto& dest, const auto& src, const auto& map_func) const
+    {
+        using cell_t    = samurai::Cell<dim, TInterval>;
+        using indices_t = typename cell_t::indices_t;
+
+        const auto& mesh     = src.mesh();
+        const auto origin    = mesh.origin();
+        const double scaling = mesh.scaling_factor();
+
+        auto i_f     = i << 1;
+        i_f.step     = 2;
+        auto index_f = index << 1;
+
+        auto dest_view = dest(level, i, index);
+        dest_view.fill(0.0);
+
+        xt::xtensor<double, 1> vol_sum = xt::zeros<double>({i.size()});
+
+        for (const auto& child : detail::cube_children<dim>())
+        {
+            const auto xt_child = detail::tail_as_xt(child);
+            const auto src_view = src(level + 1, i_f + child[0], index_f + xt_child);
+
+            indices_t fine_indices;
+            for (std::size_t d = 1; d < dim; ++d)
+            {
+                fine_indices[d] = index_f[d - 1] + child[d];
+            }
+
+            for (std::size_t idx = 0; idx < i.size(); ++idx)
+            {
+                fine_indices[0] = (i.start + static_cast<typename TInterval::coord_index_t>(idx)) * 2 + child[0];
+
+                cell_t fine_cell{origin, scaling, level + 1, fine_indices, 0};
+                const double v_c = volume(CellBox(fine_cell, map_func));
+
+                vol_sum(idx) += v_c;
+                xt::view(dest_view, idx) += v_c * xt::view(src_view, idx);
+            }
+        }
+
+        for (std::size_t idx = 0; idx < i.size(); ++idx)
+        {
+            xt::view(dest_view, idx) /= vol_sum(idx);
         }
     }
 };

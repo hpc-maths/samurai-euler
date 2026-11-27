@@ -6,7 +6,6 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
-set(SAMURAI_WITH_MPI ON)
 find_package(samurai REQUIRED)
 
 # Extract Samurai version info if it exists, and inject it into the build process
@@ -30,6 +29,9 @@ target_link_libraries(euler_2d PRIVATE samurai::samurai common_defs)
 
 add_executable(euler_3d main_3d.cpp)
 target_link_libraries(euler_3d PRIVATE samurai::samurai common_defs)
+
+add_executable(euler_2d_geometry main_2d_geometry.cpp)
+target_link_libraries(euler_2d_geometry PRIVATE samurai::samurai common_defs)
 
 # ---------------------------------------------------------------------------
 # Tests
